@@ -129,4 +129,8 @@ export {
   AGENT_DRIVER_PROVIDER_REGISTRY,
   createAgentDriverProviderCapabilities,
 } from "./runtimes/provider-registry";
-export type { AgentDriverProviderDescriptor } from "./runtimes/provider-registry";
+export type {
+  AgentDriverBackendOptions,
+  AgentDriverProviderDescriptor,
+} from "./runtimes/provider-registry";
+export type { AcpLaunchConfiguration } from "./runtimes/acp/acp-configuration";

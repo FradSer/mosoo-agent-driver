@@ -9,7 +9,7 @@ import type { ClientConnection } from "@agentclientprotocol/sdk";
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -21,14 +21,100 @@ import {
 } from "../src/runtimes/acp/acp-configuration";
 import { limitAcpInput } from "../src/runtimes/acp/acp-input-limit";
 import { setupAcpSession } from "../src/runtimes/acp/acp-session-setup";
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { createDisabledLogger } from "../src/observability";
+import { AGENT_DRIVER_PROVIDER_REGISTRY } from "../src/runtimes/provider-registry";
 import { exposeNativeSkillAliases } from "../src/runtimes/skill-bootstrap";
 import type { DriverStartInput } from "../src/protocol/start";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { driverBootPayload, driverStartInput } from "./driver-boot-payload-fixture";
+import { FakeDriverRuntimeIo } from "./driver-runtime-boundary-fixtures";
 
 const OPENCODE_COMMAND = resolve(process.cwd(), "node_modules", ".bin", "opencode");
 const REQUEST_TIMEOUT_MS = 10_000;
+
+test("pinned OpenCode starts through the registry with explicit launch and native instructions", async () => {
+  const version = spawnSync(OPENCODE_COMMAND, ["--version"], {
+    encoding: "utf8",
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+  expect(version.error).toBeUndefined();
+  expect(version.status).toBe(0);
+  expect(version.stdout.trim()).toBe("1.18.25");
+
+  const root = await mkdtemp(join(tmpdir(), "agent-driver-opencode-registry-contract-"));
+  const cwd = join(root, "workspace");
+  const homePath = join(root, "home");
+  await Promise.all([cwd, homePath].map((path) => mkdir(path)));
+  const profilePrompt = "Review each change against the user's requested scope.";
+  const payload: DriverStartInput = {
+    ...driverStartInput,
+    execution: {
+      ...driverStartInput.execution,
+      environment: {
+        variables: {
+          OPENCODE_TEST_HOME: homePath,
+          XDG_CACHE_HOME: join(homePath, ".cache"),
+          XDG_CONFIG_HOME: join(homePath, ".config"),
+          XDG_DATA_HOME: join(homePath, ".local", "share"),
+          XDG_STATE_HOME: join(homePath, ".local", "state"),
+        },
+      },
+      systemPrompt: profilePrompt,
+      session: {
+        ...driverStartInput.execution.session,
+        context: {
+          ...driverStartInput.execution.session.context,
+          homePath,
+          sessionOrganizationPath: cwd,
+        },
+        cwd,
+        homePath,
+        sharedRootPath: cwd,
+      },
+    },
+    runtime: "acp-fallback",
+    runtimeTransport: "acp-fallback",
+  };
+  const io = new FakeDriverRuntimeIo([]);
+  const failures: Error[] = [];
+  const context = createAgentDriverContext({
+    eventSink: io,
+    lifecycle: { fail: (error) => failures.push(error) },
+    logger: createDisabledLogger(),
+    payload,
+    permission: { request: async () => "reject_once" },
+    ports: { skill: { materialize: async () => [] } },
+  });
+  const backend = AGENT_DRIVER_PROVIDER_REGISTRY.createBackend(payload, {
+    acpLaunch: { command: OPENCODE_COMMAND, args: ["acp", "--pure"] },
+  });
+
+  try {
+    await backend.start(context, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+    const events = io.pushedEvents.flatMap(({ events: batch }) => batch);
+    expect(
+      events.find(({ kind }) => kind === "runtime.capabilities.updated")?.payload,
+    ).toMatchObject({
+      protocolVersion: ACP_PROTOCOL_VERSION,
+    });
+    expect(events.some(({ kind }) => kind === "session.created")).toBe(true);
+    expect(events.find(({ kind }) => kind === "runtime.resume.updated")?.payload).toMatchObject({
+      resumePointer: expect.any(String),
+    });
+    expect(await readFile(join(homePath, "runtime-instructions.md"), "utf8")).toContain(
+      profilePrompt,
+    );
+    expect(failures).toEqual([]);
+  } finally {
+    await backend.stop(
+      context,
+      "OpenCode registry contract test cleanup",
+      new AbortController().signal,
+    );
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 function discoverOpenCodeSkills(
   cwd: string,

@@ -40,14 +40,14 @@ import {
   buildClientCapabilities,
   assertProtocolVersion,
   isOpenCodeCommand,
-  readFallbackArgs,
-  readFallbackCommand,
+  resolveAcpLaunchConfiguration,
   readResumeId,
   resolveAuthMethod,
   supportsSessionClose,
   supportsSessionLoad,
   supportsSessionResume,
 } from "./acp-configuration";
+import type { AcpLaunchConfiguration } from "./acp-configuration";
 import { toAuthEvent, toInitializeEvents, toSessionReadyEvents } from "./acp-session-events";
 import { setupAcpSession } from "./acp-session-setup";
 import { withAcpStartupStage } from "./acp-startup";
@@ -68,7 +68,7 @@ export { limitAcpInput } from "./acp-input-limit";
 export class AcpDriverBackend implements AgentDriverBackend {
   readonly runtime: DriverRuntime = "acp-fallback";
   #agentCapabilities: AgentCapabilities | null = null;
-  #agentLaunch: { readonly args: readonly string[]; readonly command: string } | null = null;
+  readonly #agentLaunch: AcpLaunchConfiguration;
   #agentProcess: AcpAgentProcess | null = null;
   #agentProcessStop: { readonly process: AcpAgentProcess; readonly task: Promise<void> } | null =
     null;
@@ -88,8 +88,9 @@ export class AcpDriverBackend implements AgentDriverBackend {
   #stopTask: Promise<void> | null = null;
   readonly #turnController: AcpTurnController;
 
-  constructor(payload: DriverStartInput) {
+  constructor(payload: DriverStartInput, launch?: AcpLaunchConfiguration) {
     this.#payload = payload;
+    this.#agentLaunch = resolveAcpLaunchConfiguration(launch);
     this.#childProcessEnv = buildChildEnv(payload);
     this.#nativeSessionId = readResumeId(payload);
     this.#runtimeBootstrapDigest = computeRuntimeBootstrapDigest(payload.execution);
@@ -136,10 +137,7 @@ export class AcpDriverBackend implements AgentDriverBackend {
         materializedSkills,
         signal,
       );
-      const launch = (this.#agentLaunch ??= {
-        args: readFallbackArgs(),
-        command: readFallbackCommand(),
-      });
+      const launch = this.#agentLaunch;
       this.#nativeInstructionPath = isOpenCodeCommand(launch.command)
         ? await writeNativeRuntimeSystemPrompt(this.#payload.execution, materializedSkills, signal)
         : null;
@@ -204,10 +202,7 @@ export class AcpDriverBackend implements AgentDriverBackend {
     publishStartupEvents: boolean,
     requiredResumeSessionId: string | null = null,
   ): Promise<Awaited<ReturnType<typeof setupAcpSession>>> {
-    const launch = (this.#agentLaunch ??= {
-      args: readFallbackArgs(),
-      command: readFallbackCommand(),
-    });
+    const launch = this.#agentLaunch;
     const processEnv =
       this.#nativeInstructionPath === null
         ? this.#childProcessEnv

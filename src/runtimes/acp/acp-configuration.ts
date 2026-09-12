@@ -29,8 +29,35 @@ const ACP_INHERITED_PROCESS_ENV_KEYS = [
   "no_proxy",
 ] as const;
 
-export function readFallbackCommand(): string {
-  const command = process.env["MOSOO_ACP_FALLBACK_COMMAND"];
+/** Trusted host configuration, never accepted from an Agent or wire start payload. */
+export interface AcpLaunchConfiguration {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+export function resolveAcpLaunchConfiguration(
+  launch?: AcpLaunchConfiguration,
+  processEnv: NodeJS.ProcessEnv = process.env,
+): AcpLaunchConfiguration {
+  const command = launch === undefined ? readFallbackCommand(processEnv) : launch.command;
+  const args = launch === undefined ? readFallbackArgs(processEnv) : launch.args;
+
+  if (typeof command !== "string" || command.trim().length === 0 || command.includes("\u0000")) {
+    throw new Error("ACP launch command must be a non-empty string without NUL characters.");
+  }
+  if (
+    !Array.isArray(args) ||
+    !Array.from(args).every((arg) => typeof arg === "string" && !arg.includes("\u0000"))
+  ) {
+    throw new Error("ACP launch args must be a string array without NUL characters.");
+  }
+
+  // A backend keeps this exact launch across startup and cancellation reconnects.
+  return Object.freeze({ command: command.trim(), args: Object.freeze([...args]) });
+}
+
+export function readFallbackCommand(processEnv: NodeJS.ProcessEnv = process.env): string {
+  const command = processEnv["MOSOO_ACP_FALLBACK_COMMAND"];
   return typeof command === "string" && command.trim().length > 0
     ? command.trim()
     : ACP_DEFAULT_COMMAND;
@@ -76,8 +103,8 @@ export function appendOpenCodeInstruction(
   };
 }
 
-export function readFallbackArgs(): string[] {
-  const rawArgs = process.env["MOSOO_ACP_FALLBACK_ARGS"];
+export function readFallbackArgs(processEnv: NodeJS.ProcessEnv = process.env): string[] {
+  const rawArgs = processEnv["MOSOO_ACP_FALLBACK_ARGS"];
 
   if (typeof rawArgs !== "string" || rawArgs.trim().length === 0) {
     return [];

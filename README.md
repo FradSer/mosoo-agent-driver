@@ -74,6 +74,37 @@ Different model vendors ship different agent runtimes — the Claude Agent SDK, 
 
 ## Runtime Contract
 
+### ACP launch configuration
+
+An embedding host can select an ACP executable per backend without changing process-global
+environment variables:
+
+```ts
+const backend = AGENT_DRIVER_PROVIDER_REGISTRY.createBackend(startInput, {
+  acpLaunch: { command: "/usr/local/bin/opencode", args: ["acp", "--pure"] },
+});
+```
+
+`acpLaunch` is trusted host configuration, separate from `DriverStartInput` and Agent
+configuration. It is accepted only for the existing ACP transport. The command and argument
+array are validated and copied when the backend is constructed; startup and cancellation
+reconnects reuse that snapshot. Arguments are passed directly to the child process without
+a shell. Supplying an explicit launch never reads the fallback command or arguments.
+
+Without an explicit launch, the backend snapshots `MOSOO_ACP_FALLBACK_COMMAND` and the JSON
+string array `MOSOO_ACP_FALLBACK_ARGS` at construction. The existing `acp-agent` / empty-args
+defaults and the container's OpenCode settings remain supported. OpenCode still receives
+its native instruction configuration and keeps the `acp-fallback` runtime/resume identity.
+
+This host-side configuration does not register Pi as a supported runtime, change the wire
+protocol, or certify another executable's capabilities. See the
+[fixed-version Pi compatibility results](./docs/pi-acp-compatibility.md) before considering
+Pi admission as separate work.
+The [launch verification record](./docs/acp-launch-verification.md) distinguishes
+passing checks from local process-test blockers.
+
+### State and control
+
 The Contract is the vendor-neutral state and control boundary between the host and provider executors.
 
 - **Stable model.** A `Session` owns ordered `Run` work, each Run owns observable `Item` values, and `Interaction` represents input required from outside the executor.

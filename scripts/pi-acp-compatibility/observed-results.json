@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "scope": "Published Pi and pi-acp binaries with a deterministic loopback model; not Driver or Mosoo E2E",
+  "environment": { "node": "v24.19.0", "platform": "linux/x64" },
+  "packages": {
+    "pi-acp": "0.0.33",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@agentclientprotocol/sdk": "0.26.0"
+  },
+  "checks": [
+    { "name": "exact installed package versions", "status": "PASS" },
+    {
+      "name": "initialize",
+      "status": "PASS",
+      "evidence": "ACP protocol 1; adapter version 0.0.33"
+    },
+    {
+      "name": "session/new without provider request",
+      "status": "PASS",
+      "evidence": "Session created; two local models advertised; zero model HTTP requests"
+    },
+    {
+      "name": "explicit model selection",
+      "status": "PASS",
+      "evidence": "session/set_config_option selects fixture/beta; outgoing request model is beta"
+    },
+    {
+      "name": "real Pi write tool, text/thinking stream and end_turn",
+      "status": "PASS",
+      "evidence": "Pi wrote expected artifact bytes; ACP tool_call and completed tool_call_update, agent_message_chunk and agent_thought_chunk observed"
+    },
+    {
+      "name": "ordinary write approval enforcement",
+      "status": "UNSUPPORTED",
+      "evidence": "Actual file write occurred with zero ACP permission requests"
+    },
+    {
+      "name": "HTTP MCP forwarding",
+      "status": "UNSUPPORTED",
+      "evidence": "HTTP/SSE capability flags false; supplied HTTP endpoint received zero requests"
+    },
+    {
+      "name": "structured usage forwarding",
+      "status": "UNSUPPORTED",
+      "evidence": "Local model sent usage counts; no ACP usage_update or prompt result usage"
+    },
+    {
+      "name": "persistence paths",
+      "status": "OBSERVED",
+      "evidence": "Pi session JSONL under PI_CODING_AGENT_DIR/sessions; adapter mapping under child HOME/.pi/pi-acp/session-map.json"
+    },
+    {
+      "name": "adapter EOF child cleanup after completed prompt",
+      "status": "PASS",
+      "evidence": "Adapter exited 0 and its isolated process group no longer existed"
+    },
+    {
+      "name": "session/load after process restart",
+      "status": "PASS",
+      "evidence": "New adapter process loaded prior session ID and selected model"
+    },
+    {
+      "name": "restored history, instruction and Skill availability",
+      "status": "PASS",
+      "evidence": "Continuation request contains prior tool output, AGENTS instruction sentinel and global Skill description; no model-obedience claim"
+    },
+    {
+      "name": "untrusted project Skill availability",
+      "status": "TRUST_GATED",
+      "evidence": "Untrusted project .pi/skills description absent; project trust was not changed"
+    },
+    {
+      "name": "length finish reason",
+      "status": "FAIL",
+      "evidence": "Provider finish_reason length became ACP end_turn instead of max_tokens"
+    },
+    {
+      "name": "provider error outcome",
+      "status": "FAIL",
+      "evidence": "Provider HTTP 400 became ACP end_turn instead of a request error"
+    },
+    {
+      "name": "in-flight cancellation",
+      "status": "PASS",
+      "evidence": "session/cancel interrupted an open stream and prompt returned cancelled"
+    },
+    {
+      "name": "adapter EOF child cleanup after cancellation",
+      "status": "PASS",
+      "evidence": "Adapter exited 0 and its isolated process group no longer existed"
+    }
+  ],
+  "notVerified": [
+    "Driver ACP backend and its different SDK version against the real pair",
+    "Mosoo expiring model-bound proxy grants or live external providers",
+    "Container image build or cold workspace restoration",
+    "Ordinary tool permission denial and sandbox policy enforcement",
+    "MCP extension bridge, STDIO or SSE MCP behavior",
+    "Model obedience to instructions or execution of Skill contents"
+  ]
+}

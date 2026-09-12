@@ -760,27 +760,8 @@ async function createHarness(
       skill: { materialize: async () => [] },
     },
   });
-  const backend = new AcpDriverBackend(payload);
-  const previousCommand = process.env["MOSOO_ACP_FALLBACK_COMMAND"];
-  const previousArgs = process.env["MOSOO_ACP_FALLBACK_ARGS"];
-  process.env["MOSOO_ACP_FALLBACK_COMMAND"] = command;
-  process.env["MOSOO_ACP_FALLBACK_ARGS"] = JSON.stringify(["-e", FAKE_AGENT]);
-
-  try {
-    await backend.start(context, new AbortController().signal);
-  } finally {
-    if (previousCommand === undefined) {
-      delete process.env["MOSOO_ACP_FALLBACK_COMMAND"];
-    } else {
-      process.env["MOSOO_ACP_FALLBACK_COMMAND"] = previousCommand;
-    }
-
-    if (previousArgs === undefined) {
-      delete process.env["MOSOO_ACP_FALLBACK_ARGS"];
-    } else {
-      process.env["MOSOO_ACP_FALLBACK_ARGS"] = previousArgs;
-    }
-  }
+  const backend = new AcpDriverBackend(payload, { command, args: ["-e", FAKE_AGENT] });
+  await backend.start(context, new AbortController().signal);
 
   const handleInput = backend.handleInput.bind(backend);
   backend.handleInput = async (inputContext, input, runId, signal) => {

@@ -1,0 +1,13 @@
+{
+  "name": "mosoo-pi-compatibility-probe",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "probe": "node probe.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "pi-acp": "0.0.33"
+  }
+}

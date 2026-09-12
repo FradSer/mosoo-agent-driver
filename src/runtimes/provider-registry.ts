@@ -2,15 +2,21 @@ import type { DriverRuntime, DriverRuntimeTransport } from "../protocol/runtime"
 import type { DriverStartInput } from "../protocol/start";
 import type { DriverCapability } from "../runtime-command";
 import { AcpDriverBackend } from "./acp/acp-driver-backend";
+import type { AcpLaunchConfiguration } from "./acp/acp-configuration";
 import type { AgentDriverBackend } from "../core/agent-driver-backend";
 import { ClaudeAgentSdkDriverBackend } from "./claude/agent-sdk-driver-backend";
 import { OpenAiAppServerDriverBackend } from "./openai/app-server-driver-backend";
 
 export interface AgentDriverProviderDescriptor {
   readonly capabilities: readonly DriverCapability[];
-  createBackend(input: DriverStartInput): AgentDriverBackend;
+  createBackend(input: DriverStartInput, options?: AgentDriverBackendOptions): AgentDriverBackend;
   readonly id: DriverRuntimeTransport;
   readonly runtime: DriverRuntime;
+}
+
+export interface AgentDriverBackendOptions {
+  /** Host-owned process selection for ACP only; not part of DriverStartInput. */
+  readonly acpLaunch?: AcpLaunchConfiguration;
 }
 
 const PROVIDER_CAPABILITIES = [
@@ -32,31 +38,47 @@ const PROVIDER_CAPABILITIES = [
 const PROVIDERS = [
   {
     capabilities: PROVIDER_CAPABILITIES,
-    createBackend: (payload) => new OpenAiAppServerDriverBackend(payload),
+    createBackend: (payload, options) => {
+      assertNoAcpLaunch("openai-app-server", options);
+      return new OpenAiAppServerDriverBackend(payload);
+    },
     id: "openai-app-server",
     runtime: "openai-runtime",
   },
   {
     capabilities: PROVIDER_CAPABILITIES,
-    createBackend: (payload) => new ClaudeAgentSdkDriverBackend(payload),
+    createBackend: (payload, options) => {
+      assertNoAcpLaunch("claude-agent-sdk", options);
+      return new ClaudeAgentSdkDriverBackend(payload);
+    },
     id: "claude-agent-sdk",
     runtime: "claude-agent-sdk",
   },
   {
     capabilities: PROVIDER_CAPABILITIES,
-    createBackend: (payload) => new AcpDriverBackend(payload),
+    createBackend: (payload, options) => new AcpDriverBackend(payload, options?.acpLaunch),
     id: "acp-fallback",
     runtime: "acp-fallback",
   },
 ] as const satisfies readonly AgentDriverProviderDescriptor[];
 
 export const AGENT_DRIVER_PROVIDER_REGISTRY = {
-  createBackend(input: DriverStartInput): AgentDriverBackend {
-    return resolveProviderForStartInput(input).createBackend(input);
+  createBackend(input: DriverStartInput, options?: AgentDriverBackendOptions): AgentDriverBackend {
+    const provider = resolveProviderForStartInput(input);
+    return provider.createBackend(input, options);
   },
   getByStartInput: resolveProviderForStartInput,
   list: () => PROVIDERS,
 };
+
+function assertNoAcpLaunch(
+  transport: DriverRuntimeTransport,
+  options?: AgentDriverBackendOptions,
+): void {
+  if (options?.acpLaunch !== undefined) {
+    throw new Error(`ACP launch configuration is not supported by ${transport}.`);
+  }
+}
 
 export function createAgentDriverProviderCapabilities(input: {
   permissionRequestStatus: DriverCapability["status"];
