@@ -717,7 +717,16 @@ export class AcpDriverBackend implements AgentDriverBackend {
   }
 
   #push(context: AgentDriverContext, reason: string, events: DriverEventInput[]): Promise<void> {
-    return this.#eventPublisher.push(context, reason, events);
+    // Pi slash commands can change the frozen model/session outside host admission.
+    const admittedEvents =
+      this.runtime === "pi-acp"
+        ? events.map((event) =>
+            event.kind === "session.commands.updated"
+              ? { ...event, payload: { commands: [] } }
+              : event,
+          )
+        : events;
+    return this.#eventPublisher.push(context, reason, admittedEvents);
   }
 
   #requireConnection(): ClientContext {

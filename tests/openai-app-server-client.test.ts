@@ -963,9 +963,9 @@ setInterval(() => {}, 1000);
       const descendantTermPath = join(directory, "descendant-term");
       const descendantScript = `
 import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(descendantReadyPath)}, "ready");
 process.on("SIGTERM", () => writeFileSync(${JSON.stringify(descendantTermPath)}, "ignored"));
 setInterval(() => {}, 1000);
+writeFileSync(${JSON.stringify(descendantReadyPath)}, "ready");
 `;
 
       return `
@@ -1000,7 +1000,19 @@ process.stdin.on("data", (chunk) => {
       }
 
       await expect(harness.client.stop()).resolves.toBeUndefined();
-      expect(await Bun.file(join(harness.directory, "descendant-term")).exists()).toBe(true);
+      // The Linux watchdog may force cleanup as soon as the leader exits,
+      // before stop can deliver SIGTERM. Verify the cleanup outcome instead.
+      if (process.platform === "linux") {
+        const stat = await Bun.file(`/proc/${descendantPid}/stat`)
+          .text()
+          .catch((error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+            throw error;
+          });
+        if (stat !== "") expect(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toBe("Z");
+      } else {
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+      }
     } finally {
       if (descendantPid > 0) {
         try {

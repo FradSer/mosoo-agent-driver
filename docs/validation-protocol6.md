@@ -4,11 +4,11 @@
 
 The isolated Driver contribution is fully upgraded to the published Pi **1.0.0**, gitHead `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`. The latest published pi-acp remains **0.0.34**, gitHead `b0581c9c1d675e634234674484247008b03d69b4`. Package-manager installation updated `package.json` and `bun.lock`; container, runtime manifest, actual-package fixtures, assertions and documentation use the same pair. Pi's transitive packages are on the v1 line. Runtime dependencies and the existing other-runtime pins remain unchanged.
 
-Latest Mosoo main was rechecked at `b0bf041d955e71b24ff19fd72cf015429308d25b`, which fixes Driver `6be35bad888462d6998c06aac7f215b4cf3406f2` and protocol 6. Source is `host/apps/driver`; `reviewable-driver` is a Git review copy on that baseline. `pi-v1-protocol6.patch` contains the cumulative contribution, including the prior protocol-6 port and its verified MCP cancellation fix. No commits or publication were made.
+Latest Mosoo main was rechecked at `b0bf041d955e71b24ff19fd72cf015429308d25b`, which fixes Driver `6be35bad888462d6998c06aac7f215b4cf3406f2` and protocol 6. Source is `host/apps/driver`; `reviewable-driver` is a Git review copy on that baseline. `pi-v1-protocol6.patch` contains the cumulative contribution, including the prior protocol-6 port and its verified MCP cancellation fix. The contribution is published as [Driver draft PR #130](https://github.com/langgenius/mosoo-agent-driver/pull/130), paired with [Mosoo draft PR #654](https://github.com/langgenius/mosoo/pull/654).
 
 The original protocol-3 user workspace and prior 0.99.2 evidence are preserved. `cleanup-v1.json` confirms zero differing snapshot files. This upgrade lives in the authorized isolated protocol-6 contribution; it has not been overlaid onto the original branch.
 
-## Acceptance and verification
+## Initial upgrade verification
 
 Given old image pins, when asserting v1.0.0 admission, then the version contract fails: `pi-v1-red.log` has seven passes and one failure. After updating pins, `pi-v1-green.log` has eight passes and zero failures.
 
@@ -36,6 +36,21 @@ The official 0.99.2→1.0.0 source diff changes fullscreen TUI defaults, codemod
 
 The existing frozen Driver profile remains full-access, text-only, no Pi MCP and no additional directories. New native Pi features are not automatically exposed as Driver capabilities. Preserve both native session JSONL and the adapter session map for cold restoration. Downgrade to 0.99.2, corrupt-state migration and other providers/models are not certified.
 
-E2E uses actual latest host proxy modules with temporary SQLite/D1 bindings and the packed Driver controller. It does not certify production Durable Object control, product UI/catalog selection or provisioning. These require a separate host contribution with Pi entries, image bindings, capability gating, managed environment mapping and complete Pi-home persistence. No cloud resource, production database, external publication or original working-tree file was changed.
+The initial proxy E2E uses actual host proxy modules with temporary SQLite/D1 bindings and the packed Driver controller. The companion Mosoo contribution now implements product catalog admission, Cloudflare image bindings, capability gating and Session checkpoint persistence. A subsequent local Worker public-API E2E verifies actual provisioning and a real model turn; deployed cloud acceptance remains unverified. No production database or original working-tree file was changed.
 
-The authoritative evidence is `linux-check-final.log`; earlier intermediate logs include corrected test-harness/dependency-path failures and are retained for traceability. Earlier 0.99.2 results do not certify this v1 artifact.
+The initial upgrade evidence is `linux-check-final.log`; earlier intermediate logs include corrected test-harness/dependency-path failures and are retained for traceability. Earlier 0.99.2 results do not certify this v1 artifact.
+
+## Product admission follow-up — 2026-10-02
+
+The companion host contribution makes Pi explicitly selectable with an OpenAI-compatible credential and a declared model. It adds `SandboxPi` using the existing Cloudflare Sandbox infrastructure, retains the canonical submodule URL and checkpointed Session home, and rejects unsupported MCP or supervised/tool restrictions. Custom model listings do not invent support beyond credential declarations. Driver fixes admit the fixed local Docker proxy hostname, normalize ACP command inputs and suppress Pi commands that could bypass frozen configuration. A Linux shutdown fixture now asserts descendant cleanup rather than a racy SIGTERM handler side effect.
+
+Current-source checks:
+
+- `fix-linux-check-final.log`: formatting, lint, typecheck, build, **1,354 passed / 45 expected skips / zero failures**; six actual pinned Pi contracts; explicit old-to-new migration with 20 assertions; packed MCP regression with 24 assertions.
+- Mosoo: whole-workspace formatting/lint/typecheck passed; API **1,228 passed**, Web **242 passed**, runtime catalog **22 passed**, E2E harness **20 passed**; 65 documentation link checks passed. SQLite TEXT union additions produce no SQL migration; the existing migration chain applied in isolated local state.
+- `fix-product-e2e-verified.log`: the local Cloudflare Worker public API creates and publishes an Agent, creates a Project API key and Thread, provisions `SandboxPi`, starts the packed Driver and completes a real provider turn through Mosoo. **One E2E passed in 25.5 seconds.** A successful workspace checkpoint follows the terminal event.
+- `fix-live-cold-e2e-final.log`: the same Cloudflare Pi image independently passes real packed-Driver file write/read, usage and cold native conversation restoration; four provider responses are HTTP 200 and no grant is persisted in Pi home. Its proxy controller uses temporary SQLite/D1 fixtures; it is separate from the product admission E2E above.
+- The tested Cloudflare Pi image is `cloudflare-dev/sandboxpi:470eb359`; its packed Driver SHA-256 is `9d7ad3a426255870973b775cee3e4f0e95257961f16f1c9d5831e0fba662bae2`. Earlier image hashes certify their earlier artifacts only.
+- Fresh independent review found no remaining P0–P2 findings in product admission, credential/model presentation, local proxy boundaries, event conversion and Pi command restrictions.
+
+Latest Driver main `fd87f89c649cb7b7f81432375b67aa5401388bcb` contains a protocol-3 refactor incompatible with the Mosoo-fixed protocol-6 line. The dry-run merge reports 94 conflicts. Resolving the protocol direction remains necessary before upstream merge; the draft is not merge-ready. Deployed Cloudflare acceptance, other providers/models and a green macOS full Driver process-lifecycle suite remain unverified.

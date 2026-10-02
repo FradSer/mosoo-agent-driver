@@ -728,3 +728,23 @@ describe("ACP runtime event translation", () => {
     expect(completionUsage?.payload).not.toHaveProperty("inputTokens");
   });
 });
+
+test("Given an ACP command argument hint, When projecting commands, Then include the host unstructured input discriminator", () => {
+  const events = new AcpTurnEventState().translateUpdate({
+    update: {
+      sessionUpdate: "available_commands_update",
+      availableCommands: [
+        { name: "steering", description: "Change mode", input: { hint: "all | one-at-a-time" } },
+      ],
+    },
+  });
+  expect(events[0]?.payload).toEqual({
+    commands: [
+      {
+        name: "steering",
+        description: "Change mode",
+        input: { kind: "unstructured", hint: "all | one-at-a-time" },
+      },
+    ],
+  });
+});

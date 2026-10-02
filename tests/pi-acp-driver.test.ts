@@ -47,6 +47,9 @@ process.stdin.on("data", (chunk) => {
       if (message.method === "session/load") send({ jsonrpc: "2.0", method: "session/update", params: {
         sessionId: "pi-native-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAY-MUST-BE-SUPPRESSED" } },
       } });
+      send({ jsonrpc: "2.0", method: "session/update", params: {
+        sessionId: "pi-native-session", update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "model", description: "Change model", input: { hint: "model" } }] },
+      } });
       result = { sessionId: "pi-native-session", configOptions: configOptions() };
     }
     if (message.method === "session/set_config_option") {
@@ -217,6 +220,13 @@ describe.skipIf(process.platform !== "linux")(
         expect(harness.launches[0]?.env["OPENCODE_CONFIG_CONTENT"]).toBeUndefined();
         await harness.run("hello");
         expect(harness.events.some((event) => event.kind === "run.completed")).toBe(true);
+        const commands = harness.events.filter(
+          (event) => event.kind === "session.commands.updated",
+        );
+        expect(commands.length).toBeGreaterThan(0);
+        for (const event of commands) {
+          expect(event.payload).toMatchObject({ commands: [] });
+        }
       } finally {
         if (previousCommand === undefined) delete process.env["MOSOO_ACP_FALLBACK_COMMAND"];
         else process.env["MOSOO_ACP_FALLBACK_COMMAND"] = previousCommand;

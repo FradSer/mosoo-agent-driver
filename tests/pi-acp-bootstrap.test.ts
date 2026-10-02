@@ -209,3 +209,24 @@ describe("Given a frozen Pi model and existing Mosoo proxy grant", () => {
     },
   );
 });
+
+test("Given Mosoo local Cloudflare provisioning, When proxy uses Docker host alias, Then admit that fixed development origin", () => {
+  const input = piInput();
+  const payload = {
+    ...input,
+    execution: {
+      ...input.execution,
+      environment: {
+        variables: {
+          ...input.execution.environment.variables,
+          OPENAI_COMPATIBLE_BASE_URL:
+            "http://host.docker.internal:8787/api/driver/llm/proxy/credential-fixture",
+        },
+      },
+    },
+  };
+  expect(() => assertPiConfiguration(payload)).not.toThrow();
+  payload.execution.environment.variables.OPENAI_COMPATIBLE_BASE_URL =
+    "http://remote.example/api/driver/llm/proxy/credential-fixture";
+  expect(() => assertPiConfiguration(payload)).toThrow("Pi requires");
+});

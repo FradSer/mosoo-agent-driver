@@ -83,8 +83,11 @@ export function assertPiConfiguration(payload: DriverStartInput): void {
       JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8")),
     );
     const url = new URL(base);
-    const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error();
+    // Mosoo local Cloudflare provisioning rewrites loopback to this fixed Docker alias.
+    const localOrigin = ["127.0.0.1", "[::1]", "localhost", "host.docker.internal"].includes(
+      url.hostname,
+    );
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && localOrigin)) throw new Error();
     if (url.username || url.password || url.search || url.hash) throw new Error();
     if (url.pathname !== `/api/driver/llm/proxy/${encodeURIComponent(claims.resourceId)}`)
       throw new Error();

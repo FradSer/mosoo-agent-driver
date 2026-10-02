@@ -63,7 +63,9 @@ function normalizeCommands(raw: unknown): JsonObject[] | null {
     return [
       {
         description: readNullableString(entry, "description") ?? "",
-        input: entry["input"] ?? null,
+        input: isRecord(entry["input"])
+          ? { kind: "unstructured", hint: readString(entry["input"], "hint") ?? "" }
+          : null,
         name,
       },
     ];
