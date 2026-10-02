@@ -1,6 +1,6 @@
 import type { CmaInboundEvent, CmaOutboundEvent, CmaSessionStatus } from "../projections/cma";
-import type { RuntimeEventEnvelope } from "../runtime-events";
 import type { RuntimeCommand, RuntimeCommandResult } from "../runtime-command";
+import type { RuntimeEventEnvelope } from "../runtime-events";
 
 export const CMA_MAX_EVENT_BYTES = 1_024 * 1_024;
 export const CMA_MAX_REPLAY_BYTES = 8 * CMA_MAX_EVENT_BYTES;

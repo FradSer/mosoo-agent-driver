@@ -1,9 +1,9 @@
+import type { AgentDriverBackend } from "../core/agent-driver-backend";
 import type { AgentDriverHostPortName } from "../host-ports";
 import type { DriverRuntime, DriverRuntimeTransport } from "../protocol/runtime";
 import type { DriverStartInput } from "../protocol/start";
 import type { DriverCapability } from "../runtime-command";
 import { AcpDriverBackend } from "./acp/acp-driver-backend";
-import type { AgentDriverBackend } from "../core/agent-driver-backend";
 import { ClaudeAgentSdkDriverBackend } from "./claude/agent-sdk-driver-backend";
 import { OpenAiAppServerDriverBackend } from "./openai/app-server-driver-backend";
 
@@ -42,6 +42,17 @@ const TEXT_TOOL_CAPABILITIES = [
   { id: "visible_activity", status: "supported", version: 1 },
 ] as const satisfies readonly DriverCapability[];
 
+const PI_CAPABILITIES: readonly DriverCapability[] = [
+  ...TEXT_TOOL_CAPABILITIES.map(
+    (capability): DriverCapability =>
+      ["mcp_execute", "permission_request"].includes(capability.id)
+        ? { ...capability, status: "unsupported" }
+        : capability,
+  ),
+  { id: "native_resume", status: "supported", version: 1 },
+  { id: "thinking_stream", status: "supported", version: 1 },
+];
+
 const PROVIDERS = [
   {
     capabilities: [
@@ -75,6 +86,13 @@ const PROVIDERS = [
     id: "acp-fallback",
     requiredHostPorts: [...SHARED_REQUIRED_HOST_PORTS, "file", "host_integration"],
     runtime: "acp-fallback",
+  },
+  {
+    capabilities: PI_CAPABILITIES,
+    createBackend: (payload) => new AcpDriverBackend(payload),
+    id: "pi-acp",
+    requiredHostPorts: [...SHARED_REQUIRED_HOST_PORTS, "file", "host_integration"],
+    runtime: "pi-acp",
   },
 ] as const satisfies readonly AgentDriverProviderDescriptor[];
 
@@ -112,11 +130,12 @@ export function createAgentDriverProviderCapabilities(input: {
     capabilitiesById.set(capability.id, capability);
   }
 
-  capabilitiesById.set("permission_request", {
-    id: "permission_request",
-    status: input.permissionRequestStatus,
-    version: 1,
-  });
+  if (capabilitiesById.get("permission_request")?.status !== "unsupported")
+    capabilitiesById.set("permission_request", {
+      id: "permission_request",
+      status: input.permissionRequestStatus,
+      version: 1,
+    });
 
   return [...capabilitiesById.values()];
 }

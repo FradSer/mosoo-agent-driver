@@ -18,11 +18,11 @@ import {
   ContractProjection,
   type ContractProjectionOptions,
 } from "../contract-projection";
-import { AcpContractSessionUpdateInbox } from "./contract-session-update-inbox";
 import { AcpContractItemProjector } from "./contract-item-projector";
-import { AcpContractPermissionController } from "./contract-permission-controller";
-import { AcpContractTerminalProjector } from "./contract-terminal-projector";
 import { toUsage } from "./contract-mapping";
+import { AcpContractPermissionController } from "./contract-permission-controller";
+import { AcpContractSessionUpdateInbox } from "./contract-session-update-inbox";
+import { AcpContractTerminalProjector } from "./contract-terminal-projector";
 
 export { toConfigOptions } from "./contract-mapping";
 

@@ -2,14 +2,14 @@ import type { InitializeResponse } from "@agentclientprotocol/sdk";
 
 import type { DriverEventInput } from "../../protocol/events";
 import type { RunId } from "../../protocol/id";
-import { isRecord, readNumber, readRecord, readString } from "./acp-types";
-import type { JsonObject } from "./acp-types";
 import {
   toCapabilityEvents,
   toConfigEvents,
   toModeEvents,
   toModelEvents,
 } from "./acp-session-update-events";
+import { isRecord, readNumber, readRecord, readString } from "./acp-types";
+import type { JsonObject } from "./acp-types";
 
 // OpenCode's ACP usage reports fresh input tokens with cache read/write as
 // separate buckets (Anthropic-style), not an input total that includes them.

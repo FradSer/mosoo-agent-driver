@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { createDriverId } from "../src/protocol/id";
-import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import type { RuntimeCommand } from "../src/runtime-command";
+import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import type { CmaSessionEventRecord } from "../src/stores/cma-store";
 import { CMA_MAX_EVENT_BYTES, encodeCmaSseRecord } from "../src/stores/cma-store";
 import { createCmaMemoryStore } from "../src/stores/memory";

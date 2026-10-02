@@ -13,9 +13,23 @@ import type {
   ProtocolAdmissionLimits,
 } from "../../contract";
 import { createDriverId } from "../../protocol/id";
+import { ContractProjection } from "../contract-projection";
 import { readArray, readNonEmptyString, readRecord, readString } from "./app-server-json";
 import type { JsonObject, JsonRpcId } from "./app-server-json";
-import { ContractProjection } from "../contract-projection";
+import { OpenAiContractAdapterState } from "./contract-adapter-state";
+import type {
+  OpenAiAuthorityUpdate,
+  OpenAiContractAdapterOptions,
+  OpenAiServerReply,
+  OpenAiTurnAttachment,
+  OpenAiTurnState,
+  PendingOpenAiTurnAttachment,
+} from "./contract-adapter-types";
+import {
+  type PendingServerRequest,
+  projectOpenAiInteraction,
+  toOpenAiRequestResult,
+} from "./contract-interactions";
 import {
   monotonicUsage,
   type NativeItemLifecycle,
@@ -28,22 +42,8 @@ import {
   subtractUsage,
   toUsage,
 } from "./contract-items";
-import {
-  type PendingServerRequest,
-  projectOpenAiInteraction,
-  toOpenAiRequestResult,
-} from "./contract-interactions";
 import { OpenAiContractTurnInbox } from "./contract-turn-inbox";
 import { finishOpenAiTurn, projectOpenAiPlan } from "./contract-turn-lifecycle";
-import { OpenAiContractAdapterState } from "./contract-adapter-state";
-import type {
-  OpenAiAuthorityUpdate,
-  OpenAiContractAdapterOptions,
-  OpenAiServerReply,
-  OpenAiTurnAttachment,
-  OpenAiTurnState,
-  PendingOpenAiTurnAttachment,
-} from "./contract-adapter-types";
 
 export { OPENAI_APP_SERVER_MCP_ELICITATION_EXTENSION } from "./contract-interactions";
 

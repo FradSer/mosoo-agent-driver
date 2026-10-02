@@ -19,8 +19,8 @@ import type {
   WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
 
-import type { DriverEventInput } from "../../protocol/events";
 import type { AgentDriverContext } from "../../core/agent-driver-backend";
+import type { DriverEventInput } from "../../protocol/events";
 import { shouldIgnoreReplay } from "./acp-event-translator";
 import type { AcpPermissionOption, AcpTurnEventState } from "./acp-event-translator";
 import { AcpFileSystem } from "./acp-file-system";

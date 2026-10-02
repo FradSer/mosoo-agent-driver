@@ -122,6 +122,7 @@ function mcpCommand(
     requestId: `request-${commandId}`,
     serverId: MCP_SERVER_ID,
     toolName,
+    toolCallId: `tool-${commandId}`,
   };
 }
 
@@ -157,6 +158,7 @@ artifactTest(
     const methods: string[] = [];
     const sessions = new Map<string, string>();
     const toolCalls = new Map<string, number>();
+    const effectMetadata: { toolCallId: string | null; idempotencyKey: unknown }[] = [];
     let deleteRequests = 0;
     let hangingRequestId: unknown;
     let invalidSessionHeaders = 0;
@@ -199,6 +201,7 @@ artifactTest(
           readonly method: string;
           readonly params?: {
             readonly arguments?: Record<string, unknown>;
+            readonly _meta?: Record<string, unknown>;
             readonly name?: string;
             readonly protocolVersion?: string;
             readonly requestId?: unknown;
@@ -212,6 +215,7 @@ artifactTest(
         }
         if (message.method === "notifications/cancelled") {
           if (hangingRequestId !== undefined && message.params?.requestId === hangingRequestId) {
+            await Bun.sleep(50);
             hangCancelled.resolve();
           }
           return new Response(null, { status: 202 });
@@ -283,6 +287,10 @@ artifactTest(
           );
         }
 
+        effectMetadata.push({
+          toolCallId: request.headers.get("X-Mosoo-Tool-Call-Id"),
+          idempotencyKey: message.params?._meta?.["io.mosoo/idempotency-key"],
+        });
         const toolName = message.params?.name ?? "";
         toolCalls.set(toolName, (toolCalls.get(toolName) ?? 0) + 1);
 
@@ -408,6 +416,10 @@ artifactTest(
         status: "completed",
       });
 
+      expect(effectMetadata[0]).toEqual({
+        toolCallId: "tool-mcp-counter",
+        idempotencyKey: "artifact-test-effect-mcp-counter",
+      });
       const replayIndex = controller.commandUpdates.length;
       controller.enqueue(counterCommand);
       expect(await controller.waitForCommandTerminal("mcp-counter", 10_000, replayIndex)).toEqual(
@@ -494,6 +506,8 @@ artifactTest(
       expect(sessions.size).toBeGreaterThan(1);
       expect(unauthorizedRequests).toBe(0);
     } finally {
+      // Release the fixture handler even when cancellation notification assertions fail.
+      hangCancelled.resolve();
       await controller?.dispose();
       await server.stop(true);
       await rm(rootPath, { force: true, recursive: true });

@@ -4,9 +4,9 @@ import type {
   CmaStore,
   DriverStartInput,
 } from "@mosoo/agent-driver";
-import type { SessionSnapshot } from "@mosoo/agent-driver/contract";
 import type { CmaHttpHandler } from "@mosoo/agent-driver/cma-http";
 import type { CmaSdkClient } from "@mosoo/agent-driver/cma-sdk";
+import type { SessionSnapshot } from "@mosoo/agent-driver/contract";
 import type { DriverEventInput } from "@mosoo/agent-driver/events";
 
 export interface PublicApiConsumer {

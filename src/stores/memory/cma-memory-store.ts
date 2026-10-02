@@ -4,6 +4,7 @@ import { projectDriverEventToCma } from "../../projections/cma";
 import { createDriverId } from "../../protocol/id";
 import { parseRuntimeEventEnvelope } from "../../runtime-events";
 import type { RuntimeEventEnvelope } from "../../runtime-events";
+import { createDefaultCmaEnvironmentConfig } from "../cma-environment";
 import type {
   CmaAgentRecord,
   CmaClaimInboundEventInput,
@@ -25,7 +26,6 @@ import {
   CmaStoreConflictError,
   CmaStoreNotFoundError,
 } from "../cma-store";
-import { createDefaultCmaEnvironmentConfig } from "../cma-environment";
 import { CmaMemoryEventBroker } from "./cma-event-broker";
 
 type CmaMemoryResource = "agent" | "environment" | "event" | "session";

@@ -38,6 +38,7 @@ interface AcpAssistantMessageStart {
 }
 
 export class AcpAssistantTranscriptState {
+  readonly #allowAnonymousFinalMessage: boolean;
   #activeAssistantMessage: AcpAssistantMessageState | null = null;
   readonly #assistantMessageIds = new RuntimeAssistantMessageIdIndex<string>();
   #lastCompletedAssistantMessage: Pick<AcpAssistantMessageState, "id" | "text"> | null = null;
@@ -53,6 +54,10 @@ export class AcpAssistantTranscriptState {
   #thoughtId: string | null = null;
   #thoughtStarted = false;
   readonly #tools = new AcpToolEventState();
+
+  constructor(options: { allowAnonymousFinalMessage?: boolean } = {}) {
+    this.#allowAnonymousFinalMessage = options.allowAnonymousFinalMessage ?? false;
+  }
 
   activeRunId(): RunId | null {
     return this.#runId;
@@ -553,6 +558,8 @@ export class AcpAssistantTranscriptState {
 
     if (message.nativeMessageId !== null) {
       this.#settledAssistantNativeMessageIds.add(message.nativeMessageId);
+    }
+    if (message.nativeMessageId !== null || this.#allowAnonymousFinalMessage) {
       this.#lastCompletedAssistantMessage = {
         id: message.id,
         text: message.text,

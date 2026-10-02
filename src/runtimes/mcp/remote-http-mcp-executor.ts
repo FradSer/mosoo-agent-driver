@@ -208,6 +208,17 @@ export async function executeRemoteHttpMcpCommand(
       headers: { [MOSOO_TOOL_CALL_ID_HEADER]: command.toolCallId },
     },
   });
+  // The pinned SDK rejects the request before its fire-and-forget cancellation
+  // send settles. Keep the transport open until that send has drained.
+  const send = transport.send.bind(transport);
+  let cancellationSend: Promise<void> | undefined;
+  transport.send = (message, options) => {
+    const pending = send(message, options);
+    if ("method" in message && message.method === "notifications/cancelled") {
+      cancellationSend = pending;
+    }
+    return pending;
+  };
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS)]);
 
   try {
@@ -233,16 +244,24 @@ export async function executeRemoteHttpMcpCommand(
   } catch (error) {
     throw mapMcpExecutionError(command, server, error);
   } finally {
-    if (!requestSignal.aborted) {
-      await settlePromiseWithTimeout(transport.terminateSession(), {
-        label: "MCP session termination",
+    try {
+      if (cancellationSend !== undefined) {
+        await settlePromiseWithTimeout(cancellationSend, {
+          label: "MCP cancellation notification",
+          timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
+        });
+      }
+      if (!requestSignal.aborted) {
+        await settlePromiseWithTimeout(transport.terminateSession(), {
+          label: "MCP session termination",
+          timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
+        });
+      }
+    } finally {
+      await settlePromiseWithTimeout(client.close(), {
+        label: "MCP client close",
         timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
       });
     }
-
-    await settlePromiseWithTimeout(client.close(), {
-      label: "MCP client close",
-      timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
-    });
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { StopReason } from "@agentclientprotocol/sdk";
 import { readFileSync } from "node:fs";
+
+import type { StopReason } from "@agentclientprotocol/sdk";
 
 import type { DriverEventInput } from "../src/protocol/events";
 import { AcpTurnEventState, toSessionReadyEvents } from "../src/runtimes/acp/acp-event-translator";

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import type { CmaInboundEvent } from "../src/projections/cma";
 import { createDriverId } from "../src/protocol/id";
-import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import type { RuntimeCommand } from "../src/runtime-command";
+import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import { CmaStoreConflictError } from "../src/stores/cma-store";
 import { createCmaMemoryStore } from "../src/stores/memory";
 

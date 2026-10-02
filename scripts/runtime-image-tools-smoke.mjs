@@ -2,18 +2,19 @@
 // No credentials, external model, or inference latency are involved.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const profile = (await readFile("/etc/mosoo/runtime", "utf8")).trim();
-const profiles = JSON.parse(await readFile("/etc/mosoo/runtime-images.json", "utf8"));
-const runtimes = profiles
-  .filter((entry) => profile === "all" || entry.profile === profile)
-  .map((entry) => entry.profile);
-assert.ok(runtimes.length > 0, `Unknown runtime image profile: ${profile}`);
-for (const runtime of runtimes) {
+// Overrides let the pinned-package contract test reuse this fixture without
+// requiring an image or privileged user switching. Run with external networking
+// disabled by the caller; PI_OFFLINE alone is not a network sandbox.
+export async function runRuntimeToolsSmoke(
+  runtime,
+  { piCommand = "/usr/local/bin/mosoo-pi", uid = 65534, gid = 65534, nodeOptions, networkLog } = {},
+) {
   const cwd = await mkdtemp(join(tmpdir(), "mosoo-native-image-"));
   await chmod(cwd, 0o777);
   const marker = join(cwd, "marker.txt");
@@ -194,7 +195,7 @@ for (const runtime of runtimes) {
   const base = `http://127.0.0.1:${server.address().port}`;
   const prompt = "Use your shell tool to write the requested marker, then finish.";
   const env = {
-    ...process.env,
+    ...(runtime === "pi" ? { PATH: process.env.PATH } : process.env),
     HOME: cwd,
     XDG_CONFIG_HOME: cwd,
     XDG_CACHE_HOME: cwd,
@@ -204,6 +205,16 @@ for (const runtime of runtimes) {
     OPENAI_API_KEY: "fixture",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     OPENCODE_DISABLE_MODELS_FETCH: "true",
+    ...(runtime === "pi"
+      ? {
+          PI_CODING_AGENT_DIR: cwd,
+          PI_OFFLINE: "1",
+          PI_TELEMETRY: "0",
+          npm_config_offline: "true",
+          ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
+          ...(networkLog ? { PI_CONTRACT_NETWORK_LOG: networkLog } : {}),
+        }
+      : {}),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       permission: "allow",
@@ -248,15 +259,50 @@ for (const runtime of runtimes) {
       prompt,
     ],
     opencode: ["opencode", "run", "--model", "local/fixture", prompt],
+    pi: [
+      piCommand,
+      "--print",
+      "--provider",
+      "local",
+      "--model",
+      "fixture",
+      "--thinking",
+      "off",
+      "--no-session",
+      "--no-extensions",
+      "--no-approve",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-themes",
+      "--offline",
+      "--tools",
+      "bash",
+      prompt,
+    ],
   };
   try {
+    if (runtime === "pi") {
+      await writeFile(
+        join(cwd, "models.json"),
+        JSON.stringify({
+          providers: {
+            local: {
+              baseUrl: `${base}/v1`,
+              api: "openai-completions",
+              apiKey: "fixture",
+              models: [{ id: "fixture", reasoning: false, contextWindow: 200000, maxTokens: 4096 }],
+            },
+          },
+        }),
+      );
+    }
     const [executable, ...args] = commands[runtime];
     let output = "";
     const child = spawn(executable, args, {
       cwd,
       env,
-      uid: 65534,
-      gid: 65534,
+      uid,
+      gid,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout.on("data", (chunk) => {
@@ -292,4 +338,14 @@ for (const runtime of runtimes) {
     await new Promise((resolve) => server.close(resolve));
     await rm(cwd, { recursive: true, force: true });
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const profile = (await readFile("/etc/mosoo/runtime", "utf8")).trim();
+  const profiles = JSON.parse(await readFile("/etc/mosoo/runtime-images.json", "utf8"));
+  const runtimes = profiles
+    .filter((entry) => profile === "all" || entry.profile === profile)
+    .map((entry) => entry.profile);
+  assert.ok(runtimes.length > 0, `Unknown runtime image profile: ${profile}`);
+  for (const runtime of runtimes) await runRuntimeToolsSmoke(runtime);
 }

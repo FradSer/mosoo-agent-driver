@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { OPENAI_APP_SERVER_SCHEMA_VERSION } from "../src/runtimes/openai/generated/app-server-protocol-types";
 import { AGENT_DRIVER_VERSION } from "../src/core/version";
+import { OPENAI_APP_SERVER_SCHEMA_VERSION } from "../src/runtimes/openai/generated/app-server-protocol-types";
 
 type DriverPackageExportTarget =
   | string
@@ -268,7 +268,8 @@ describe("driver artifact contract", () => {
     const typesTsconfig = readText("../tsconfig.types.json");
 
     expect(deps.filter((dependency) => dependency.startsWith("@mosoo/"))).toEqual([]);
-    expect(packageJson.dependencies).not.toHaveProperty("@cfworker/json-schema");
+    // The pinned MCP client imports this peer at module load time.
+    expect(packageJson.dependencies).toHaveProperty("@cfworker/json-schema", "4.1.1");
     expect(packageJson.dependencies).toHaveProperty("fflate");
     expect(packageJson.dependencies).toHaveProperty("vestig");
     expect(tsconfig).not.toContain("../../dev/");

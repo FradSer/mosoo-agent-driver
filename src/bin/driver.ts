@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 import { readDriverBootPayload } from "../boot/read-driver-boot-payload";
-import { DriverProcess } from "./driver-process";
 import { logDriverFatal } from "../infrastructure/logging/driver-logger";
 import { isSupportedDriverRuntime, isSupportedDriverRuntimeTransport } from "../protocol/runtime";
+import { DriverProcess } from "./driver-process";
 
 async function main(): Promise<void> {
   const payload = await readDriverBootPayload();

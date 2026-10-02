@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { createBufferedSinkLogger } from "../src/observability";
 import {
   ACP_PROTOCOL_VERSION,
@@ -8,13 +9,13 @@ import {
   buildClientCapabilities,
   assertProtocolVersion,
   isOpenCodeCommand,
+  readResumeId,
   resolveAuthMethod,
   supportsAdditionalDirs,
   supportsSessionClose,
   supportsSessionResume,
 } from "../src/runtimes/acp/acp-configuration";
 import { AcpDriverBackend, limitAcpInput } from "../src/runtimes/acp/acp-driver-backend";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { bootPayload } from "./driver-runtime-boundary-fixtures";
 
 function createInitializeResult(protocolVersion: number | string | null) {
@@ -27,6 +28,37 @@ function createInitializeResult(protocolVersion: number | string | null) {
 }
 
 describe("ACP runtime configuration", () => {
+  test("Given a Pi native pointer, when reading resume identity, then only the Pi runtime accepts it", () => {
+    const payload = {
+      ...bootPayload,
+      runtime: "pi-acp",
+      execution: {
+        ...bootPayload.execution,
+        session: {
+          ...bootPayload.execution.session,
+          nativeResumeRef: { runtimeId: "pi-acp", kind: "acp_session_id", value: "pi-session" },
+        },
+      },
+    } as typeof bootPayload;
+    expect(readResumeId(payload)).toBe("pi-session");
+    expect(() => readResumeId({ ...payload, runtime: "acp-fallback" })).toThrow("incompatible");
+    expect(() =>
+      readResumeId({
+        ...payload,
+        execution: {
+          ...payload.execution,
+          session: {
+            ...payload.execution.session,
+            nativeResumeRef: {
+              runtimeId: "acp-fallback",
+              kind: "acp_session_id",
+              value: "opencode-session",
+            },
+          },
+        },
+      }),
+    ).toThrow("incompatible");
+  });
   test("adds a session instruction to OpenCode's inline config", () => {
     const instructionPath = "/workspace/session/runtime-instructions.md";
     const env = appendOpenCodeInstruction(

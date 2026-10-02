@@ -20,6 +20,7 @@ import {
 } from "./acp-configuration";
 import { isRecord } from "./acp-types";
 import type { JsonObject } from "./acp-types";
+import { readPiModelId, readPiThinkingLevel } from "./pi-acp-bootstrap";
 
 export type AcpSessionSetupMode = "created" | "loaded" | "resumed";
 
@@ -76,6 +77,53 @@ async function restoreAcpSession<T>(
   }
 }
 
+async function configurePiSession(
+  input: AcpSessionSetupInput,
+  setup: AcpSessionSetup,
+): Promise<AcpSessionSetup> {
+  if (input.payload.runtime !== "pi-acp") return setup;
+
+  let options = setup.raw["configOptions"];
+  const findOption = (id: string) =>
+    Array.isArray(options)
+      ? options.find((candidate) => isRecord(candidate) && candidate["id"] === id)
+      : undefined;
+  const select = async (configId: string, value: string, optional = false) => {
+    const option = findOption(configId);
+    if (option === undefined && optional) return;
+    if (!isRecord(option) || option["type"] !== "select" || !Array.isArray(option["options"])) {
+      throw new Error(`Pi ACP session is missing the ${configId} select option.`);
+    }
+    if (!option["options"].some((entry) => isRecord(entry) && entry["value"] === value)) {
+      throw new Error(`Pi ACP ${configId} option does not offer the configured value: ${value}.`);
+    }
+    const result = await input.connection.request(acpMethods.agent.session.setConfigOption, {
+      configId,
+      sessionId: setup.sessionId,
+      value,
+    });
+    const selected = result.configOptions.find((candidate) => candidate.id === configId);
+    if (selected?.currentValue !== value) {
+      throw new Error(
+        `Pi ACP ${configId} selection did not confirm the configured value: ${value}.`,
+      );
+    }
+    options = result.configOptions;
+  };
+
+  const model = `mosoo/${readPiModelId(input.payload)}`;
+  await select("model", model);
+  const thinking = readPiThinkingLevel(input.payload);
+  await select("thought_level", thinking, thinking === "off");
+  // A thinking update returns the entire configuration; don't admit a session
+  // whose adapter silently changed the model while applying the frozen effort.
+  const finalModel = findOption("model");
+  if (!isRecord(finalModel) || finalModel["currentValue"] !== model) {
+    throw new Error("Pi ACP model changed while selecting the thinking level.");
+  }
+  return { ...setup, raw: { ...setup.raw, configOptions: options } };
+}
+
 export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpSessionSetup> {
   const mcpServers = buildMcpServers(input.payload);
   assertMcpSupport(input.agentCapabilities, mcpServers);
@@ -119,12 +167,12 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
       result = await resume();
     }
 
-    return {
+    return configurePiSession(input, {
       droppedAdditionalDirectories,
       mode: "resumed",
       raw: isRecord(result) ? result : {},
       sessionId: existingSessionId,
-    };
+    });
   }
 
   if (existingSessionId !== null && supportsSessionLoad(input.agentCapabilities)) {
@@ -133,12 +181,12 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
       const result = await restoreAcpSession("load", existingSessionId, () =>
         input.connection.request(acpMethods.agent.session.load, params),
       );
-      return {
+      return configurePiSession(input, {
         droppedAdditionalDirectories,
         mode: "loaded",
         raw: isRecord(result) ? result : {},
         sessionId: existingSessionId,
-      };
+      });
     });
   }
 
@@ -152,10 +200,10 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
     throw new Error("ACP driver backend agent returned an empty session id.");
   }
 
-  return {
+  return configurePiSession(input, {
     droppedAdditionalDirectories,
     mode: "created",
     raw: isRecord(result) ? result : {},
     sessionId: result.sessionId,
-  };
+  });
 }

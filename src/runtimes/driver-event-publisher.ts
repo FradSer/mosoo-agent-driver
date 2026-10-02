@@ -1,3 +1,4 @@
+import type { AgentDriverContext } from "../core/agent-driver-backend";
 import {
   assertDriverEventReceiptPrefix,
   DRIVER_EVENT_DELIVERY_TIMEOUT_MS,
@@ -9,7 +10,6 @@ import type { DriverEventInput } from "../protocol/events";
 import type { RunId } from "../protocol/id";
 import type { DriverEventReceipt } from "../protocol/orpc";
 import type { DriverRuntime } from "../protocol/runtime";
-import type { AgentDriverContext } from "../core/agent-driver-backend";
 import {
   admitDriverEventPush,
   driverEventBatchBytes,

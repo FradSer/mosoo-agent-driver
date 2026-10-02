@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
+import { PermissionEventDeliveryError } from "../src/core/driver-permission-broker";
 import type { AgentDriverPermissionPort } from "../src/host-ports";
 import { createBufferedSinkLogger } from "../src/observability";
 import type { DriverExecutionEnvironment } from "../src/protocol/boot";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
-import { PermissionEventDeliveryError } from "../src/core/driver-permission-broker";
 import * as childProcessHelpers from "../src/runtimes/child-process";
 import { OpenAiAppServerClient, limitNdjsonLines } from "../src/runtimes/openai/app-server-client";
 import type { ServerNotificationMethod } from "../src/runtimes/openai/generated/app-server-protocol";

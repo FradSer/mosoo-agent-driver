@@ -2,13 +2,13 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { itemSchema } from "../../contract";
 import type { ContentBlock } from "../../contract";
+import { createProviderMeta } from "../contract-adapter-meta";
 import { asJsonValue, ContractProjection, nonEmpty } from "../contract-projection";
 import { isRecord, readNumber, readRecord, readString } from "./agent-sdk-json";
 import type { JsonObject } from "./agent-sdk-json";
 import { toContentBlocks, toolCategory } from "./contract-items";
-import { createProviderMeta } from "../contract-adapter-meta";
-import { ClaudeContractTranscriptState } from "./contract-transcript-state";
 import { finishClaudeResult } from "./contract-result";
+import { ClaudeContractTranscriptState } from "./contract-transcript-state";
 
 const { cause: providerCause, provenance } = createProviderMeta("anthropic");
 

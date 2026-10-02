@@ -2,12 +2,14 @@ export const SUPPORTED_DRIVER_RUNTIMES = [
   "openai-runtime",
   "claude-agent-sdk",
   "acp-fallback",
+  "pi-acp",
 ] as const;
 
 export const SUPPORTED_DRIVER_RUNTIME_TRANSPORTS = [
   "openai-app-server",
   "claude-agent-sdk",
   "acp-fallback",
+  "pi-acp",
 ] as const;
 
 export const SUPPORTED_DRIVER_NATIVE_RUNTIME_REF_KINDS = [
@@ -44,6 +46,7 @@ export function getExpectedDriverNativeRuntimeRefKind(
     case "claude-agent-sdk": {
       return "claude_session_id";
     }
+    case "pi-acp":
     case "acp-fallback": {
       return "acp_session_id";
     }

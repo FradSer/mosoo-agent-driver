@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { createBufferedSinkLogger } from "../src/observability";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
 import {
@@ -15,7 +16,6 @@ import {
 } from "../src/runtimes/acp/acp-agent-process";
 import { buildChildEnv } from "../src/runtimes/acp/acp-configuration";
 import { spawnLinuxProcessTreeWatchdog } from "../src/runtimes/child-process";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { driverBootPayload, driverStartInput } from "./driver-boot-payload-fixture";
 
 function createHarness() {

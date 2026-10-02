@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { commandReceiptSchema, commandRecordSchema, commandSchema } from "./command";
 import {
   capabilitiesSchema,
   implementationSchema,
@@ -13,7 +14,6 @@ import {
   protocolVersionSchema,
   revisionSchema,
 } from "./common";
-import { commandReceiptSchema, commandRecordSchema, commandSchema } from "./command";
 import { mutationReceiptSchema, proposedMutationSchema } from "./mutation";
 import { executorPreviewSubmissionSchema } from "./preview";
 import { subscriptionUpdateSchema, syncPayloadSchema } from "./sync";

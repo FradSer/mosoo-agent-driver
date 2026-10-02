@@ -15,6 +15,7 @@ function startInputFor(transport: DriverRuntimeTransport): DriverStartInput {
     "acp-fallback": "acp-fallback",
     "claude-agent-sdk": "claude-agent-sdk",
     "openai-app-server": "openai-runtime",
+    "pi-acp": "pi-acp",
   } as const satisfies Record<DriverRuntimeTransport, DriverStartInput["runtime"]>;
 
   return createDriverStartInputFromBootPayload({
@@ -38,6 +39,10 @@ describe("provider registry", () => {
       {
         id: "acp-fallback",
         runtime: "acp-fallback",
+      },
+      {
+        id: "pi-acp",
+        runtime: "pi-acp",
       },
     ]);
   });
@@ -101,6 +106,10 @@ describe("provider registry", () => {
       },
       {
         id: "acp-fallback",
+        requiredHostPorts: ["event_sink", "permission", "mcp", "skill", "file", "host_integration"],
+      },
+      {
+        id: "pi-acp",
         requiredHostPorts: ["event_sink", "permission", "mcp", "skill", "file", "host_integration"],
       },
     ]);

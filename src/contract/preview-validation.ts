@@ -1,8 +1,8 @@
 import { assertProtocolAdmission, type ProtocolAdmissionLimits } from "./common";
+import { invariant, itemKey } from "./invariant";
 import type { PreviewBatch } from "./preview";
 import { previewBatchSchema } from "./preview";
 import type { Item, SessionSnapshot } from "./state";
-import { invariant, itemKey } from "./invariant";
 import { validateSessionSnapshot } from "./state-validation";
 
 function previewItemKind(

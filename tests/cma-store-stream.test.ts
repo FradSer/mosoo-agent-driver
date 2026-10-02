@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import type { CmaInboundEvent } from "../src/projections/cma";
 import { createDriverId } from "../src/protocol/id";
-import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import type { RuntimeCommand } from "../src/runtime-command";
+import { parseRuntimeEventEnvelope } from "../src/runtime-events";
 import {
   CMA_MAX_EVENT_BYTES,
   CMA_MAX_REPLAY_BYTES,

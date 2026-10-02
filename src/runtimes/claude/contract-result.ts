@@ -2,8 +2,8 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { itemSchema } from "../../contract";
 import type { ProtocolError } from "../../contract";
-import { asJsonValue, type ContractProjection } from "../contract-projection";
 import { createProviderMeta } from "../contract-adapter-meta";
+import { asJsonValue, type ContractProjection } from "../contract-projection";
 import { finishReason, isLimit, isRetryable, toUsage } from "./contract-items";
 
 const { cause: providerCause, provenance } = createProviderMeta("anthropic");

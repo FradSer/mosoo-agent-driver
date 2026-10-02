@@ -1,5 +1,5 @@
-import { summarizeDriverPermissionRequest } from "../observability/driver-debug";
 import type { Logger } from "../observability";
+import { summarizeDriverPermissionRequest } from "../observability/driver-debug";
 import type { DriverEventInput } from "../protocol/events";
 import type { RunId } from "../protocol/id";
 import { promiseWithTimeout, settlePromiseWithTimeout } from "../utils/async";

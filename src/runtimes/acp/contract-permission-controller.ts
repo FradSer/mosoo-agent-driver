@@ -10,8 +10,8 @@ import {
   ContractProjection,
   nonEmpty,
 } from "../contract-projection";
-import type { AcpContractSessionUpdateInbox } from "./contract-session-update-inbox";
 import type { AcpContractItemProjector } from "./contract-item-projector";
+import type { AcpContractSessionUpdateInbox } from "./contract-session-update-inbox";
 
 const { cause: providerCause, provenance } = createProviderMeta("agent-client-protocol");
 

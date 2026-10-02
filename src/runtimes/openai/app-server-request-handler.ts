@@ -1,5 +1,5 @@
-import { PermissionEventDeliveryError } from "../../core/driver-permission-broker";
 import type { AgentDriverContext } from "../../core/agent-driver-backend";
+import { PermissionEventDeliveryError } from "../../core/driver-permission-broker";
 import { isRecord, readRecord, readString, stringifyForDisplay } from "./app-server-json";
 import type { JsonObject } from "./app-server-json";
 import type {

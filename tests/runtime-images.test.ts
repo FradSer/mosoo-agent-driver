@@ -1,11 +1,160 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import images from "../runtime-images.json";
 import { SUPPORTED_DRIVER_RUNTIMES } from "../src/protocol/runtime";
-import { AGENT_DRIVER_PROVIDER_REGISTRY } from "../src/runtimes/provider-registry";
 
+const containerfile = readFileSync(new URL("../Containerfile", import.meta.url), "utf8");
 describe("runtime image coverage", () => {
-  test("gives every admitted runtime and executable backend an image tested by CI", () => {
+  // Given a selected image profile, when it is built, then only its pinned
+  // runtime is installed; all retains OpenCode alongside the new Pi adapter.
+  test("Given Pi v1.0.0, when selecting an image, then the adapter and CLI pins retain the OpenCode fallback", () => {
+    expect(images.find((image) => image.runtimeId === "pi-acp")).toMatchObject({
+      profile: "pi",
+      command: "/usr/local/bin/pi-acp",
+      package: "pi-acp",
+      version: "0.0.34",
+      gitHead: "b0581c9c1d675e634234674484247008b03d69b4",
+      additionalPackages: [
+        {
+          package: "@earendil-works/pi-coding-agent",
+          version: "1.0.0",
+          gitHead: "a13d35a742c6ef8462812a28fbe1d8c8b7431c32",
+          command: "/usr/local/bin/pi",
+          probe: ["--version"],
+        },
+      ],
+    });
+    expect(containerfile).toContain("ARG PI_ACP_VERSION=0.0.34");
+    expect(containerfile).toContain("ARG PI_VERSION=1.0.0");
+    expect(containerfile).toContain('if [ "$RUNTIME" = all ] || [ "$RUNTIME" = pi ]; then');
+    expect(containerfile).toContain("pi-acp@${PI_ACP_VERSION}");
+    expect(containerfile).toContain("@earendil-works/pi-coding-agent@${PI_VERSION}");
+    expect(containerfile).toContain("ENV MOSOO_ACP_FALLBACK_COMMAND=opencode");
+    expect(containerfile).toContain('ENV MOSOO_ACP_FALLBACK_ARGS=[\\"acp\\",\\"--pure\\"]');
+  });
+
+  test("preserves every existing runtime profile and executable probe", () => {
+    expect(images.filter((image) => image.runtimeId !== "pi-acp")).toEqual([
+      {
+        runtimeId: "claude-agent-sdk",
+        profile: "claude",
+        command: "mosoo-claude-code",
+        package: "@anthropic-ai/claude-agent-sdk-linux-x64",
+        probe: ["--version"],
+      },
+      {
+        runtimeId: "openai-runtime",
+        profile: "openai",
+        command: "codex",
+        package: "@openai/codex",
+        probe: ["app-server", "--help"],
+      },
+      {
+        runtimeId: "acp-fallback",
+        profile: "opencode",
+        command: "opencode",
+        package: "opencode-linux-x64-baseline",
+        probe: ["acp", "--help"],
+      },
+    ]);
+    const packages = images.flatMap((image) => [image, ...(image.additionalPackages ?? [])]);
+    expect(new Set(packages.map((entry) => entry.command)).size).toBe(packages.length);
+    expect(new Set(packages.map((entry) => entry.package)).size).toBe(packages.length);
+  });
+
+  test("checks every profile at build time, including real Pi ACP initialization", () => {
+    for (const image of images) {
+      expect(containerfile).toContain(`|| [ "$RUNTIME" = ${image.profile} ]; then`);
+    }
+    expect(containerfile).toContain("COPY scripts/pi-acp-image-check.mjs");
+    const check = readFileSync(
+      new URL("../scripts/runtime-image-check.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(check).toContain("pi-acp-image-check.mjs");
+    expect(check).toContain("additionalPackages");
+    expect(check).toContain(".version");
+  });
+
+  test("runs Pi through the fixed project-resource-disabled launcher", () => {
+    const launcher = readFileSync(new URL("../scripts/mosoo-pi", import.meta.url), "utf8");
+    expect(launcher).toContain(
+      'exec /usr/local/bin/pi --no-extensions --no-approve --no-prompt-templates "$@"',
+    );
+    expect(containerfile).toContain("COPY scripts/mosoo-pi /usr/local/libexec/mosoo/mosoo-pi");
+    expect(containerfile).toContain("/usr/local/bin/mosoo-pi");
+  });
+
+  test("Given the production build context, When copying Pi scripts, Then the launcher and capability probe are admitted", () => {
+    const admittedPaths = readFileSync(
+      new URL("../.containerignore", import.meta.url),
+      "utf8",
+    ).split(/\r?\n/);
+    for (const path of ["scripts/mosoo-pi", "scripts/pi-acp-image-check.mjs"]) {
+      expect(containerfile).toContain(`COPY ${path} `);
+      expect(admittedPaths).toContain(`!${path}`);
+    }
+  });
+
+  test("Given Linux CI, When running the required checks, Then the pinned Pi contract cannot be silently skipped", () => {
+    const { scripts } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(scripts["test:pi-acp"]).toBe(
+      "PI_ACP_PINNED_CONTRACT=1 bun test tests/pi-acp-pinned-contract.test.ts tests/pi-acp-driver.test.ts",
+    );
+    expect(scripts["check"]).toContain("vp run test:pi-acp");
+    const workflow = readFileSync(new URL("../.github/workflows/pr.yml", import.meta.url), "utf8");
+    expect(workflow).toContain("runs-on: ubuntu-latest");
+    expect(workflow).toContain("run: vp run check");
+  });
+
+  // Given an adapter initialize response, when a pin or advertised capability
+  // drifts, then the image probe fails rather than admitting the new contract.
+  test("rejects version and capability drift in actual initialize responses", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import assert from "node:assert/strict";
+      import { verifyPiInitialize } from "./scripts/pi-acp-image-check.mjs";
+      const response = {
+        jsonrpc: "2.0", id: 1,
+        result: {
+          protocolVersion: 1, agentInfo: { name: "pi-acp", version: "0.0.34" },
+          agentCapabilities: {
+            loadSession: true, mcpCapabilities: { http: false, sse: false },
+            promptCapabilities: { image: true, audio: false, embeddedContext: false },
+            sessionCapabilities: { list: {}, delete: {} },
+          },
+        },
+      };
+      verifyPiInitialize(response);
+      for (const mutate of [
+        r => { r.result.agentInfo.version = "0.0.35"; },
+        r => { r.result.protocolVersion = 2; },
+        r => { r.result.agentCapabilities.mcpCapabilities.http = true; },
+        r => { r.result.agentCapabilities.promptCapabilities.embeddedContext = true; },
+        r => { r.result.agentCapabilities.loadSession = false; },
+        r => { r.error = { code: -32603 }; },
+      ]) {
+        const changed = structuredClone(response);
+        mutate(changed);
+        assert.throws(() => verifyPiInitialize(changed));
+      }
+    `,
+      ],
+      { cwd: new URL("..", import.meta.url), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  test("gives every admitted runtime and executable backend an image tested by CI", async () => {
+    const { AGENT_DRIVER_PROVIDER_REGISTRY } = await import("../src/runtimes/provider-registry");
     const runtimeIds = images.map((image) => image.runtimeId).toSorted();
     expect(runtimeIds).toEqual([...SUPPORTED_DRIVER_RUNTIMES].toSorted());
     expect(runtimeIds).toEqual(

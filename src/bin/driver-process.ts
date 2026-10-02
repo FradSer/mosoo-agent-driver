@@ -1,8 +1,8 @@
+import { AgentBackendLifecycle } from "../core/agent-backend-lifecycle";
 import type { AgentDriverBackendFactory, AgentDriverContext } from "../core/agent-driver-backend";
 import { createAgentDriverContext } from "../core/agent-driver-backend";
-import { AgentBackendLifecycle } from "../core/agent-backend-lifecycle";
-import { DriverCommandDispatcher } from "../core/driver-command-dispatcher";
 import { deliverRunTerminal } from "../core/driver-command-delivery";
+import { DriverCommandDispatcher } from "../core/driver-command-dispatcher";
 import { pushDriverDiagnosticEvent } from "../core/driver-diagnostics";
 import { DriverHeartbeatLoop } from "../core/driver-heartbeat-loop";
 import { DriverPermissionBroker } from "../core/driver-permission-broker";

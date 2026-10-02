@@ -1,3 +1,5 @@
+import { Readable, Writable } from "node:stream";
+
 import {
   client as createAcpClient,
   methods as acpMethods,
@@ -10,8 +12,9 @@ import type {
   ClientContext,
   InitializeResponse,
 } from "@agentclientprotocol/sdk";
-import { Readable, Writable } from "node:stream";
 
+import type { AgentDriverBackend, AgentDriverContext } from "../../core/agent-driver-backend";
+import { AGENT_DRIVER_VERSION } from "../../core/version";
 import { summarizePath, summarizePathCollection } from "../../observability/driver-debug";
 import type { DriverEventInput } from "../../protocol/events";
 import type { DriverHostIntegrationSnapshot } from "../../protocol/host-integration";
@@ -20,8 +23,6 @@ import type { DriverRuntime } from "../../protocol/runtime";
 import type { DriverStartInput } from "../../protocol/start";
 import type { RuntimeCommandInput } from "../../runtime-command";
 import { raceWithAbort, settlePromiseWithTimeout } from "../../utils/async";
-import { AGENT_DRIVER_VERSION } from "../../core/version";
-import type { AgentDriverBackend, AgentDriverContext } from "../../core/agent-driver-backend";
 import { DriverEventPublisher } from "../driver-event-publisher";
 import {
   buildRuntimeBootstrapText,
@@ -33,7 +34,6 @@ import { exposeNativeSkillAliases } from "../skill-materialization";
 import { startAcpAgentProcess, stopAcpAgentProcess } from "./acp-agent-process";
 import type { AcpAgentProcess } from "./acp-agent-process";
 import { AcpClientRequestHandler } from "./acp-client-request-handler";
-import { limitAcpInput } from "./acp-input-limit";
 import {
   ACP_PROTOCOL_VERSION,
   appendOpenCodeInstruction,
@@ -50,6 +50,7 @@ import {
   supportsSessionResume,
 } from "./acp-configuration";
 import { toAuthEvent, toInitializeEvents, toSessionReadyEvents } from "./acp-event-translator";
+import { limitAcpInput } from "./acp-input-limit";
 import { setupAcpSession } from "./acp-session-setup";
 import { withAcpStartupStage } from "./acp-startup";
 import { AcpTurnController } from "./acp-turn-controller";
@@ -63,17 +64,24 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+import {
+  assertPiConfiguration,
+  assertPiPromptText,
+  buildPiChildEnv,
+  preparePiBootstrap,
+} from "./pi-acp-bootstrap";
+
 export { limitAcpInput } from "./acp-input-limit";
 
 export class AcpDriverBackend implements AgentDriverBackend {
-  readonly runtime: DriverRuntime = "acp-fallback";
+  readonly runtime: DriverRuntime;
   #agentCapabilities: AgentCapabilities | null = null;
   #agentLaunch: { readonly args: readonly string[]; readonly command: string } | null = null;
   #agentProcess: AcpAgentProcess | null = null;
   readonly #childProcessEnv: Record<string, string>;
   readonly #clientRequests: AcpClientRequestHandler;
   #connection: ClientConnection | null = null;
-  readonly #eventPublisher = new DriverEventPublisher(this.runtime, () => this.#nativeSessionId);
+  readonly #eventPublisher: DriverEventPublisher;
   #hostSnapshot: DriverHostIntegrationSnapshot | null = null;
   #nativeSessionId: string | null = null;
   #nativeInstructionPath: string | null = null;
@@ -87,13 +95,17 @@ export class AcpDriverBackend implements AgentDriverBackend {
 
   constructor(payload: DriverStartInput) {
     this.#payload = payload;
-    this.#childProcessEnv = buildChildEnv(payload);
+    this.runtime = payload.runtime;
+    this.#eventPublisher = new DriverEventPublisher(this.runtime, () => this.#nativeSessionId);
+    this.#childProcessEnv =
+      payload.runtime === "pi-acp" ? buildPiChildEnv(payload) : buildChildEnv(payload);
     this.#nativeSessionId = readResumeId(payload);
     this.#runtimeBootstrapDigest = computeRuntimeBootstrapDigest(payload.execution);
     this.#runtimeBootstrapText = buildRuntimeBootstrapText(payload.execution);
     this.#turnController = new AcpTurnController(
       (context, reason, events) => this.#push(context, reason, events),
       (context) => this.#recycleCancelledTurn(context),
+      { allowAnonymousFinalMessage: this.runtime === "pi-acp" },
     );
     this.#clientRequests = new AcpClientRequestHandler({
       allowedRoots: payload.execution.session.additionalDirectories,
@@ -124,6 +136,8 @@ export class AcpDriverBackend implements AgentDriverBackend {
       context.ports.skill.materialize(this.#payload.execution),
       signal,
     );
+    if (this.runtime === "pi-acp")
+      await preparePiBootstrap(this.#payload, materializedSkills, signal);
     const nativeSkillAliases = await raceWithAbort(
       exposeNativeSkillAliases(this.#payload.execution, context.logger, materializedSkills),
       signal,
@@ -132,13 +146,11 @@ export class AcpDriverBackend implements AgentDriverBackend {
       writeSkillBootstrapArtifacts(this.#payload.execution),
       signal,
     );
-    const launch = (this.#agentLaunch ??= {
-      args: readFallbackArgs(),
-      command: readFallbackCommand(),
-    });
-    this.#nativeInstructionPath = isOpenCodeCommand(launch.command)
-      ? await raceWithAbort(writeNativeRuntimeSystemPrompt(this.#payload.execution), signal)
-      : null;
+    const launch = this.#resolveLaunch();
+    this.#nativeInstructionPath =
+      this.runtime !== "pi-acp" && isOpenCodeCommand(launch.command)
+        ? await raceWithAbort(writeNativeRuntimeSystemPrompt(this.#payload.execution), signal)
+        : null;
 
     if (this.#stopRequested || signal.aborted) {
       signal.throwIfAborted();
@@ -153,7 +165,11 @@ export class AcpDriverBackend implements AgentDriverBackend {
 
       const setup = await this.#connect(context, signal, true);
 
-      if (setup.mode === "created" && this.#nativeInstructionPath === null) {
+      if (
+        this.runtime !== "pi-acp" &&
+        setup.mode === "created" &&
+        this.#nativeInstructionPath === null
+      ) {
         await withAcpStartupStage(
           "ACP runtime bootstrap",
           () => this.#applyBootstrap(context, signal),
@@ -200,16 +216,20 @@ export class AcpDriverBackend implements AgentDriverBackend {
     }
   }
 
+  #resolveLaunch(): { readonly args: readonly string[]; readonly command: string } {
+    return (this.#agentLaunch ??=
+      this.runtime === "pi-acp"
+        ? { args: [], command: "/usr/local/bin/pi-acp" }
+        : { args: readFallbackArgs(), command: readFallbackCommand() });
+  }
+
   async #connect(
     context: AgentDriverContext,
     signal: AbortSignal,
     publishStartupEvents: boolean,
     requiredResumeSessionId: string | null = null,
   ): Promise<Awaited<ReturnType<typeof setupAcpSession>>> {
-    const launch = (this.#agentLaunch ??= {
-      args: readFallbackArgs(),
-      command: readFallbackCommand(),
-    });
+    const launch = this.#resolveLaunch();
     const processEnv =
       this.#nativeInstructionPath === null
         ? this.#childProcessEnv
@@ -328,7 +348,11 @@ export class AcpDriverBackend implements AgentDriverBackend {
       );
       assertProtocolVersion(initResult);
       this.#agentCapabilities = initResult.agentCapabilities ?? null;
-      if (requiredResumeSessionId !== null && !supportsSessionResume(this.#agentCapabilities)) {
+      if (
+        requiredResumeSessionId !== null &&
+        !supportsSessionResume(this.#agentCapabilities) &&
+        !(this.runtime === "pi-acp" && supportsSessionLoad(this.#agentCapabilities))
+      ) {
         throw new Error("ACP agent does not support native session resume after cancellation.");
       }
       if (publishStartupEvents) {
@@ -365,7 +389,8 @@ export class AcpDriverBackend implements AgentDriverBackend {
 
       if (
         requiredResumeSessionId !== null &&
-        (setup.mode !== "resumed" || setup.sessionId !== requiredResumeSessionId)
+        ((setup.mode !== "resumed" && !(this.runtime === "pi-acp" && setup.mode === "loaded")) ||
+          setup.sessionId !== requiredResumeSessionId)
       ) {
         throw new Error("ACP agent did not resume the cancelled turn's native session.");
       }
@@ -423,6 +448,10 @@ export class AcpDriverBackend implements AgentDriverBackend {
     runId: RunId,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (this.runtime === "pi-acp") {
+      assertPiConfiguration(this.#payload);
+      assertPiPromptText(input.text);
+    }
     await this.#turnController.handleInput(
       context,
       input,

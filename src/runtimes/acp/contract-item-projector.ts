@@ -10,7 +10,6 @@ import {
   ContractProjection,
   nonEmpty,
 } from "../contract-projection";
-import type { AcpContractTerminalProjector } from "./contract-terminal-projector";
 import {
   itemStatus,
   toChanges,
@@ -19,6 +18,7 @@ import {
   toolError,
   toOutput,
 } from "./contract-mapping";
+import type { AcpContractTerminalProjector } from "./contract-terminal-projector";
 
 const { cause: providerCause, provenance } = createProviderMeta("agent-client-protocol");
 

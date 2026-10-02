@@ -1,8 +1,8 @@
 import { AuthorityOutcomeUnknownError } from "../../contract";
+import type { ContractProjection } from "../contract-projection";
 import type { JsonRpcId } from "./app-server-json";
 import type { PendingServerRequest } from "./contract-interactions";
 import { OpenAiPrivateCitationStreamFilter } from "./private-citation-filter";
-import type { ContractProjection } from "../contract-projection";
 
 export class OpenAiContractAdapterState {
   readonly #interactions = new Map<string, PendingServerRequest>();

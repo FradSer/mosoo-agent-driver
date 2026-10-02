@@ -5,6 +5,7 @@ import type { DriverEventInput } from "../src/protocol/events";
 import type { RunId } from "../src/protocol/id";
 import {
   AcpTurnEventState,
+  AcpAssistantTranscriptState,
   toPermissionRequest,
   toPermissionResolvedEvent,
 } from "../src/runtimes/acp/acp-event-translator";
@@ -195,6 +196,47 @@ describe("ACP runtime event translation", () => {
     expect(new TextEncoder().encode(eventPayloadString(completed, "finalMessageText"))).toEqual(
       new TextEncoder().encode(finalText),
     );
+  });
+
+  test("Given the Pi anonymous-message profile, When a text-only prompt ends, Then its Driver message becomes the final output", () => {
+    const state = new AcpAssistantTranscriptState({ allowAnonymousFinalMessage: true });
+    state.begin({ messageId: "pi-prompt", runId: RUN_ID, sessionId: DRIVER_TEST_IDS.sessionId });
+    const events = [
+      ...state.translateUpdate({
+        update: {
+          content: { text: "Pi final answer", type: "text" },
+          sessionUpdate: "agent_message_chunk",
+        },
+      }),
+      ...state.completePrompt("end_turn", null),
+    ];
+    const finalMessage = requireEvent(events, "message.delta");
+    expect(eventPayload(finalMessage)).toMatchObject({ contentDelta: "Pi final answer" });
+    expect(eventPayload(requireEvent(events, "run.completed"))).toMatchObject({
+      finalMessageId: eventPayloadString(finalMessage, "messageId"),
+      stopReason: "end_turn",
+    });
+    expect(eventKinds(events)).not.toContain("run.failed");
+  });
+
+  test("Given the Pi anonymous-message profile, When the prompt returns only whitespace, Then it still fails as empty", () => {
+    const state = new AcpAssistantTranscriptState({ allowAnonymousFinalMessage: true });
+    state.begin({
+      messageId: "pi-empty-prompt",
+      runId: RUN_ID,
+      sessionId: DRIVER_TEST_IDS.sessionId,
+    });
+    state.translateUpdate({
+      update: {
+        content: { text: "   ", type: "text" },
+        sessionUpdate: "agent_message_chunk",
+      },
+    });
+    const events = state.completePrompt("end_turn", null);
+    expect(eventPayload(requireEvent(events, "run.failed"))).toMatchObject({
+      error: { code: "acp.empty_turn" },
+    });
+    expect(eventKinds(events)).not.toContain("run.completed");
   });
 
   test("uses a later identified final after anonymous progress, but fails closed for an anonymous final", () => {

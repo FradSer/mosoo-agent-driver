@@ -7,12 +7,11 @@ import type { Interface as ReadlineInterface } from "node:readline";
 import { Transform } from "node:stream";
 import type { TransformCallback } from "node:stream";
 
+import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import { toDurationMs } from "../../core/driver-runtime-timing";
+import { AGENT_DRIVER_VERSION } from "../../core/version";
 import type { DriverStartInput } from "../../protocol/start";
 import { raceWithAbort, settlePromiseWithTimeout } from "../../utils/async";
-import { AGENT_DRIVER_VERSION } from "../../core/version";
-import type { AgentDriverContext } from "../../core/agent-driver-backend";
-import { buildRuntimeChildProcessEnv } from "../child-process-env";
 import {
   bindSpawnedProcess,
   createProcessTreeEnvironment,
@@ -23,6 +22,7 @@ import {
   waitForLinuxProcessMarkerExit,
 } from "../child-process";
 import type { BoundSpawnedProcess } from "../child-process";
+import { buildRuntimeChildProcessEnv } from "../child-process-env";
 import { summarizeOpenAiProxyEnv } from "./app-server-env";
 import {
   isRecord,
@@ -32,6 +32,7 @@ import {
   toJsonRpcId,
 } from "./app-server-json";
 import type { JsonObject } from "./app-server-json";
+import { OpenAiAppServerRequestHandler } from "./app-server-request-handler";
 import {
   materializeOpenAiApiKeyAuthState,
   materializeOpenAiModelProviderConfig,
@@ -51,7 +52,6 @@ import {
   parseServerNotificationParams,
 } from "./generated/app-server-protocol";
 import { buildOpenAiMcpServerConfig } from "./mcp-config";
-import { OpenAiAppServerRequestHandler } from "./app-server-request-handler";
 
 interface PendingJsonRpcRequest {
   method: string;

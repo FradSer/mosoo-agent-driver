@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { DriverProcess } from "../src/bin/driver-process";
-import { DriverInstanceSocket } from "../src/infrastructure/runtime/driver-instance-socket";
 import type { AgentDriverContext } from "../src/core/agent-driver-backend";
 import { DriverTurnCancelledError } from "../src/core/driver-runtime-state";
+import { DriverInstanceSocket } from "../src/infrastructure/runtime/driver-instance-socket";
 import type { RuntimeCommand } from "../src/runtime-command";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { DRIVER_TEST_IDS, driverBootPayload } from "./driver-boot-payload-fixture";

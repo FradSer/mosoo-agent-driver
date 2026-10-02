@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 
+import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import type { DriverEventInput } from "../../protocol/events";
 import { createDriverId } from "../../protocol/id";
 import { settlePromiseWithTimeout } from "../../utils/async";
-import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import {
   bindSpawnedProcess,
   createProcessTreeEnvironment,
@@ -16,6 +16,7 @@ import {
   waitForLinuxProcessMarkerExit,
 } from "../child-process";
 import type { BoundSpawnedProcess, LinuxProcessTreeWatchdog } from "../child-process";
+import { AcpPathScope } from "./acp-path-scope";
 import {
   isRecord,
   raceWithAbort,
@@ -25,7 +26,6 @@ import {
   readString,
 } from "./acp-types";
 import type { JsonObject } from "./acp-types";
-import { AcpPathScope } from "./acp-path-scope";
 
 interface AcpTerminalState {
   readonly closed: Promise<void>;

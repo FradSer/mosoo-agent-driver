@@ -7,12 +7,12 @@ import type {
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import type { AgentDriverContext } from "../../core/agent-driver-backend";
+import { AGENT_DRIVER_VERSION } from "../../core/version";
 import type { DriverBootMcpServer } from "../../protocol/boot";
 import type { DriverBuiltInToolName } from "../../protocol/boot";
 import type { JsonObject } from "../../protocol/json";
 import type { DriverStartInput } from "../../protocol/start";
-import { AGENT_DRIVER_VERSION } from "../../core/version";
-import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import { buildRuntimeChildProcessEnv } from "../child-process-env";
 import { toMcpServerKey } from "../mcp/server-key";
 import { mergeProviderOptions } from "../provider-options";

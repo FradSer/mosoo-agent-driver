@@ -1,4 +1,8 @@
 import { CmaUnsupportedFieldError } from "../../projections/cma";
+import {
+  CMA_ENVIRONMENT_PACKAGE_MANAGERS,
+  createDefaultCmaEnvironmentConfig,
+} from "../../stores/cma-environment";
 import type {
   CmaCreateAgentInput,
   CmaCreateEnvironmentInput,
@@ -10,10 +14,6 @@ import type {
   CmaEnvironmentPackageManager,
 } from "../../stores/cma-store";
 import { CMA_MAX_EVENT_BYTES } from "../../stores/cma-store";
-import {
-  CMA_ENVIRONMENT_PACKAGE_MANAGERS,
-  createDefaultCmaEnvironmentConfig,
-} from "../../stores/cma-environment";
 import { CmaHttpCapabilityGapError, CmaHttpRequestError } from "./contract";
 
 const createAgentFields = new Set(["id", "metadata", "name"]);

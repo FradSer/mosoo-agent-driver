@@ -14,12 +14,12 @@ import type {
   Run,
   SessionSnapshot,
 } from "../src/contract";
+import type { ContractPreviewUpdate } from "../src/runtimes/contract-projection";
 import {
   OPENAI_APP_SERVER_MCP_ELICITATION_EXTENSION,
   OpenAiContractAdapter,
   type OpenAiAuthorityUpdate,
 } from "../src/runtimes/openai/contract-adapter";
-import type { ContractPreviewUpdate } from "../src/runtimes/contract-projection";
 
 const SESSION_ID = protocolId(1);
 const RUN_ID = protocolId(2);

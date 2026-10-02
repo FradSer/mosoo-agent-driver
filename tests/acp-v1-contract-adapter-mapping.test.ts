@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk";
 
 import {

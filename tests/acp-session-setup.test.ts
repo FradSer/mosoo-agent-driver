@@ -15,6 +15,26 @@ const strictStartInput = {
   },
 };
 
+const piPayload: typeof driverStartInput = {
+  ...driverStartInput,
+  runtime: "pi-acp",
+  runtimeTransport: "pi-acp",
+  execution: { ...driverStartInput.execution, provider: "openai-compatible" },
+};
+const piModel = `mosoo/${piPayload.execution.model}`;
+function modelConfiguration(currentValue = "other/default", available = true) {
+  return [
+    {
+      type: "select",
+      id: "model",
+      category: "model",
+      name: "Model",
+      currentValue,
+      options: available ? [{ value: piModel, name: piModel }] : [],
+    },
+  ];
+}
+
 function withAdditionalDirectories(directories: readonly string[]): typeof driverStartInput {
   return {
     ...driverStartInput,
@@ -60,6 +80,152 @@ function setupInput(input: {
     sessionContext: driverBootPayload.execution.session.context,
   };
 }
+
+describe("Pi ACP model selection", () => {
+  for (const mode of ["created", "loaded", "resumed"] as const) {
+    test(`Given a Pi ${mode} session with another default model, when setup runs, then it selects and verifies the exact frozen model`, async () => {
+      const requests: Array<{ method: string; params: unknown }> = [];
+      let replaying = false;
+      const result = await setupAcpSession({
+        sessionContext: driverBootPayload.execution.session.context,
+        agentCapabilities:
+          mode === "resumed" ? { sessionCapabilities: { resume: {} } } : { loadSession: true },
+        connection: connectionWith(async (method, params) => {
+          requests.push({ method, params });
+          if (method === acpMethods.agent.session.setConfigOption) {
+            expect(replaying).toBe(mode === "loaded");
+            return { configOptions: modelConfiguration(piModel) };
+          }
+          return { sessionId: "pi-session", configOptions: modelConfiguration() };
+        }),
+        currentSessionId: mode === "created" ? null : EXISTING_SESSION_ID,
+        payload: piPayload,
+        replaySession: async (operation) => {
+          replaying = true;
+          try {
+            return await operation();
+          } finally {
+            replaying = false;
+          }
+        },
+      });
+      expect(result.mode).toBe(mode);
+      expect(requests[1]).toEqual({
+        method: acpMethods.agent.session.setConfigOption,
+        params: { configId: "model", value: piModel, sessionId: result.sessionId },
+      });
+      expect(result.raw["configOptions"]).toEqual(modelConfiguration(piModel));
+    });
+  }
+
+  test("Given a provider-prefixed Pi model, when setup runs, then only the selected provider prefix is stripped", async () => {
+    const payload = {
+      ...piPayload,
+      execution: { ...piPayload.execution, model: "openai-compatible/vendor/model" },
+    };
+    const values: unknown[] = [];
+    const result = await setupAcpSession({
+      sessionContext: driverBootPayload.execution.session.context,
+      agentCapabilities: {},
+      currentSessionId: null,
+      payload,
+      replaySession: async (operation) => operation(),
+      connection: connectionWith(async (method, params) => {
+        if (method === acpMethods.agent.session.setConfigOption)
+          values.push((params as { value: string }).value);
+        return {
+          sessionId: "pi-session",
+          configOptions: [
+            {
+              ...modelConfiguration()[0],
+              currentValue: "mosoo/vendor/model",
+              options: [{ value: "mosoo/vendor/model", name: "Model" }],
+            },
+          ],
+        };
+      }),
+    });
+    expect(result.sessionId).toBe("pi-session");
+    expect(values).toEqual(["mosoo/vendor/model"]);
+  });
+
+  for (const failure of ["none", "missing", "unavailable", "mismatch", "model-drift"] as const) {
+    test(`Given frozen high thinking with ${failure}, when Pi setup runs, then effort is selected and verified or rejected`, async () => {
+      const calls: unknown[] = [];
+      const payload = {
+        ...piPayload,
+        execution: { ...piPayload.execution, providerOptions: { pi: { thinkingLevel: "high" } } },
+      };
+      const setup = setupAcpSession({
+        sessionContext: driverBootPayload.execution.session.context,
+        agentCapabilities: {},
+        currentSessionId: null,
+        payload,
+        replaySession: async (operation) => operation(),
+        connection: connectionWith(async (method, params) => {
+          const value = params as { configId?: string; value?: string };
+          if (method === acpMethods.agent.session.setConfigOption) calls.push(params);
+          const appliedThinking = value.configId === "thought_level";
+          return {
+            sessionId: "pi-session",
+            configOptions: [
+              ...modelConfiguration(
+                appliedThinking && failure === "model-drift" ? "other/default" : piModel,
+              ),
+              ...(failure === "missing"
+                ? []
+                : [
+                    {
+                      type: "select",
+                      id: "thought_level",
+                      category: "thought_level",
+                      name: "Thinking",
+                      currentValue: appliedThinking && failure !== "mismatch" ? "high" : "off",
+                      options:
+                        failure === "unavailable"
+                          ? [{ value: "off", name: "Off" }]
+                          : [{ value: "high", name: "High" }],
+                    },
+                  ]),
+            ],
+          };
+        }),
+      });
+      if (failure !== "none") {
+        await expect(setup).rejects.toThrow("Pi ACP");
+      } else {
+        await expect(setup).resolves.toMatchObject({ sessionId: "pi-session" });
+        expect(calls).toEqual([
+          { configId: "model", sessionId: "pi-session", value: piModel },
+          { configId: "thought_level", sessionId: "pi-session", value: "high" },
+        ]);
+      }
+    });
+  }
+
+  for (const failure of ["missing", "unavailable", "mismatch"] as const) {
+    test(`Given a Pi model configuration that is ${failure}, when setup runs, then readiness fails closed`, async () => {
+      await expect(
+        setupAcpSession({
+          sessionContext: driverBootPayload.execution.session.context,
+          agentCapabilities: {},
+          connection: connectionWith(async (method) => ({
+            sessionId: "pi-session",
+            ...(failure === "missing"
+              ? {}
+              : { configOptions: modelConfiguration("other/default", failure !== "unavailable") }),
+            ...(method === acpMethods.agent.session.setConfigOption
+              ? { configOptions: modelConfiguration("other/default") }
+              : {}),
+          })),
+          currentSessionId: null,
+          payload: piPayload,
+          replaySession: async (operation) => operation(),
+        }),
+      ).rejects.toThrow("Pi ACP");
+    });
+  }
+});
 
 describe("ACP session setup", () => {
   test("creates the first native context for a strict Session without a prior reference", async () => {

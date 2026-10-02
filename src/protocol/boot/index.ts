@@ -515,8 +515,10 @@ export function parseDriverBootPayload(value: unknown): DriverBootPayload {
     );
   }
 
-  if (driverGeneration < 0) {
-    throw new TypeError("Driver boot payload.driverGeneration must be non-negative.");
+  if (!Number.isSafeInteger(driverGeneration) || driverGeneration < 0) {
+    throw new TypeError(
+      "Driver boot payload.driverGeneration must be a non-negative safe integer.",
+    );
   }
 
   if (heartbeatIntervalMs < 250) {
@@ -535,6 +537,15 @@ export function parseDriverBootPayload(value: unknown): DriverBootPayload {
     throw new TypeError(`Unsupported runtime transport: ${runtimeTransport}.`);
   }
 
+  if ((runtime === "pi-acp") !== (runtimeTransport === "pi-acp")) {
+    throw new TypeError("Pi runtime does not match runtime transport.");
+  }
+  const execution = readExecution(record["execution"]);
+  const nativeRef = execution.session.nativeResumeRef;
+  if (nativeRef !== null && nativeRef.runtimeId !== runtime) {
+    throw new TypeError("Native resume runtime does not match runtime.");
+  }
+
   const controlUrl = readNonEmptyString(record, "controlUrl", "Driver boot payload");
 
   try {
@@ -549,7 +560,7 @@ export function parseDriverBootPayload(value: unknown): DriverBootPayload {
     driverControlPort,
     driverGeneration,
     driverInstanceId: parseId(record["driverInstanceId"], "Driver instance ID") as DriverInstanceId,
-    execution: readExecution(record["execution"]),
+    execution,
     heartbeatIntervalMs,
     protocolVersion,
     runtime,

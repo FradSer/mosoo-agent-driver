@@ -17,7 +17,7 @@ import {
   parseDriverReadyInput,
   type DriverLogEntry,
 } from "../src/protocol/orpc";
-import type { DriverCapability } from "../src/runtime-command";
+import type { DriverCapability, McpExternalToolEffectClaim } from "../src/runtime-command";
 import { PROCESS_TREE_OWNER_ENV } from "../src/runtimes/child-process";
 import {
   AGENT_DRIVER_PROVIDER_REGISTRY,
@@ -294,6 +294,7 @@ function readSameUserLinuxIdentity(pid: number): LinuxProcessIdentity | null {
 export class DriverArtifactTestController {
   readonly #bootPayload: DriverArtifactBootPayload;
   readonly #commands: DriverArtifactTestCommand[] = [];
+  readonly #externalToolEffects = new Map<string, McpExternalToolEffectClaim>();
   readonly #commandUpdates: DriverArtifactTestCommandUpdate[] = [];
   readonly #eventIngressGates = new Set<EventIngressGateState>();
   readonly #eventIngressObservers = new Set<(event: DriverArtifactTestEvent) => void>();
@@ -571,7 +572,7 @@ export class DriverArtifactTestController {
   }): Promise<DriverArtifactTestEvent[]> {
     const eventIndex = this.#events.length;
     this.enqueue({
-      commandId: input.commandId,
+      commandId: input["commandId"],
       input: { text: input.text },
       kind: "input.start",
       requestId: input.requestId,
@@ -579,7 +580,7 @@ export class DriverArtifactTestController {
     });
 
     const [update, terminalEvent] = await Promise.all([
-      this.waitForCommandTerminal(input.commandId, input.timeoutMs),
+      this.waitForCommandTerminal(input["commandId"], input.timeoutMs),
       this.waitForEvent(
         (event) =>
           event.runId === input.runId &&
@@ -993,6 +994,47 @@ export class DriverArtifactTestController {
           ...(update.error === undefined ? {} : { error: update.error }),
           ...(update.result === undefined ? {} : { result: update.result }),
           status: update.status,
+        });
+        return { ok: true };
+      }
+      case "/driver/claimExternalToolEffect": {
+        this.#assertDriverInstanceId(String(input["driverInstanceId"]));
+        const commandId = String(input["commandId"]);
+        const effectId = `artifact-test-effect-${commandId}`;
+        const existing = this.#externalToolEffects.get(commandId);
+        if (existing !== undefined) {
+          if (existing.kind !== "execute") return existing;
+          const unknown = { effectId, kind: "unknown" } as const;
+          this.#externalToolEffects.set(commandId, unknown);
+          return unknown;
+        }
+        const claim = { attempt: 1, effectId, idempotencyKey: effectId, kind: "execute" } as const;
+        this.#externalToolEffects.set(commandId, claim);
+        return claim;
+      }
+      case "/driver/completeExternalToolEffect": {
+        const update = parseDriverCommandUpdateInput({ ...input, status: "completed" });
+        this.#assertDriverInstanceId(update.driverInstanceId);
+        if (
+          update.result === null ||
+          update.result === undefined ||
+          !("toolName" in update.result)
+        ) {
+          throw new Error("External tool effect requires an MCP result.");
+        }
+        this.#externalToolEffects.set(update.commandId, {
+          effectId: `artifact-test-effect-${update.commandId}`,
+          kind: "completed",
+          result: update.result,
+        });
+        return { ok: true };
+      }
+      case "/driver/markExternalToolEffectUnknown": {
+        this.#assertDriverInstanceId(String(input["driverInstanceId"]));
+        const commandId = String(input["commandId"]);
+        this.#externalToolEffects.set(commandId, {
+          effectId: `artifact-test-effect-${commandId}`,
+          kind: "unknown",
         });
         return { ok: true };
       }

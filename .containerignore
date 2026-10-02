@@ -5,5 +5,7 @@
 !scripts/
 !scripts/environment-package-manager-check.mjs
 !scripts/runtime-image-check.mjs
+!scripts/pi-acp-image-check.mjs
+!scripts/mosoo-pi
 !dist/
 !dist/driver.mjs

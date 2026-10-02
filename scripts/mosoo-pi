@@ -1,0 +1,4 @@
+#!/bin/sh
+# Only platform-materialized global resources are admitted. The adapter owns
+# RPC/session arguments; project-local code and prompt discovery stay disabled.
+exec /usr/local/bin/pi --no-extensions --no-approve --no-prompt-templates "$@"

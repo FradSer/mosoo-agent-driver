@@ -1,9 +1,4 @@
-import type { CommittedMutation } from "./mutation";
-import { committedMutationSchema } from "./mutation";
 import { assertProtocolAdmission, compareTimestamps } from "./common";
-import type { SyncPayload } from "./sync";
-import { syncPayloadSchema } from "./sync";
-import type { SessionSnapshot } from "./state";
 import { authorityContent } from "./content-admission";
 import {
   assertNotBefore,
@@ -13,6 +8,9 @@ import {
   isTerminalRun,
   itemKey,
 } from "./invariant";
+import type { CommittedMutation } from "./mutation";
+import { committedMutationSchema } from "./mutation";
+import type { SessionSnapshot } from "./state";
 import {
   assertSessionTransition,
   putInteraction,
@@ -21,6 +19,8 @@ import {
   validateSessionSnapshot,
   validateState,
 } from "./state-validation";
+import type { SyncPayload } from "./sync";
+import { syncPayloadSchema } from "./sync";
 
 export { authorityContent } from "./content-admission";
 export { normalizeExecutorMutation, validateExecutorMutation } from "./executor-mutation";

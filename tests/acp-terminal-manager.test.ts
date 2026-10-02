@@ -5,12 +5,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import { createBufferedSinkLogger } from "../src/observability";
 import type { DriverEventInput } from "../src/protocol/events";
 import { createDriverId, isDriverId } from "../src/protocol/id";
-import { spawnLinuxProcessTreeWatchdog } from "../src/runtimes/child-process";
 import { AcpTerminalManager } from "../src/runtimes/acp/acp-terminal-manager";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
+import { spawnLinuxProcessTreeWatchdog } from "../src/runtimes/child-process";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { driverStartInput } from "./driver-boot-payload-fixture";
 

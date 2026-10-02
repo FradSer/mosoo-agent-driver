@@ -1,11 +1,4 @@
 import { expect, test } from "bun:test";
-
-import {
-  client as createAcpClient,
-  methods as acpMethods,
-  ndJsonStream,
-} from "@agentclientprotocol/sdk";
-import type { ClientConnection } from "@agentclientprotocol/sdk";
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -15,15 +8,22 @@ import { join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
 
 import {
+  client as createAcpClient,
+  methods as acpMethods,
+  ndJsonStream,
+} from "@agentclientprotocol/sdk";
+import type { ClientConnection } from "@agentclientprotocol/sdk";
+
+import { createBufferedSinkLogger } from "../src/observability";
+import type { DriverStartInput } from "../src/protocol/start";
+import {
   ACP_PROTOCOL_VERSION,
   assertProtocolVersion,
   buildClientCapabilities,
 } from "../src/runtimes/acp/acp-configuration";
 import { limitAcpInput } from "../src/runtimes/acp/acp-input-limit";
 import { setupAcpSession } from "../src/runtimes/acp/acp-session-setup";
-import { createBufferedSinkLogger } from "../src/observability";
 import { exposeNativeSkillAliases } from "../src/runtimes/skill-materialization";
-import type { DriverStartInput } from "../src/protocol/start";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { driverBootPayload, driverStartInput } from "./driver-boot-payload-fixture";
 

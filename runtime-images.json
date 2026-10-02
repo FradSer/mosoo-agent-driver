@@ -19,5 +19,23 @@
     "command": "opencode",
     "package": "opencode-linux-x64-baseline",
     "probe": ["acp", "--help"]
+  },
+  {
+    "runtimeId": "pi-acp",
+    "profile": "pi",
+    "command": "/usr/local/bin/pi-acp",
+    "package": "pi-acp",
+    "version": "0.0.34",
+    "gitHead": "b0581c9c1d675e634234674484247008b03d69b4",
+    "probe": [],
+    "additionalPackages": [
+      {
+        "package": "@earendil-works/pi-coding-agent",
+        "version": "1.0.0",
+        "gitHead": "a13d35a742c6ef8462812a28fbe1d8c8b7431c32",
+        "command": "/usr/local/bin/pi",
+        "probe": ["--version"]
+      }
+    ]
   }
 ]

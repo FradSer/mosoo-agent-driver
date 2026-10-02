@@ -1,6 +1,7 @@
+import { basename } from "node:path";
+
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { AgentCapabilities, ClientCapabilities, McpServer } from "@agentclientprotocol/sdk";
-import { basename } from "node:path";
 
 import type { DriverExecutionSessionContext } from "../../protocol/boot";
 import type { DriverStartInput } from "../../protocol/start";
@@ -195,12 +196,15 @@ export function readResumeId(payload: DriverStartInput): string | null {
     return null;
   }
 
-  if (ref.runtimeId !== "acp-fallback" || ref.kind !== "acp_session_id") {
-    throw new Error("ACP fallback received an incompatible native resume ref.");
+  const runtime = payload.runtime === "pi-acp" ? "pi-acp" : "acp-fallback";
+  const label = runtime === "pi-acp" ? "Pi ACP" : "ACP fallback";
+
+  if (ref.runtimeId !== runtime || ref.kind !== "acp_session_id") {
+    throw new Error(`${label} received an incompatible native resume ref.`);
   }
 
   if (ref.value.trim().length === 0) {
-    throw new Error("ACP fallback received an empty native session ID.");
+    throw new Error(`${label} received an empty native session ID.`);
   }
 
   return ref.value;

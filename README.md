@@ -226,3 +226,7 @@ The release workflow extracts the packed NPM archive to `packed/` and blocks ima
 ## License
 
 Licensed under the [Apache License 2.0](./LICENSE.txt).
+
+## Pi through ACP
+
+The additive `pi-acp` runtime uses the shared ACP backend and a managed Mosoo Chat Completions grant. See [the Pi integration contract](docs/pi-acp.md) for the exact package pair, protocol-6 port, capability limits and verification evidence.

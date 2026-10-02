@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { permissionResolutionSchema, toolResolutionSchema } from "./command";
 import {
   audienceSchema,
   capabilitiesSchema,
@@ -14,7 +15,6 @@ import {
   revisionSchema,
   timestampSchema,
 } from "./common";
-import { permissionResolutionSchema, toolResolutionSchema } from "./command";
 import { contentBlockSchema } from "./content";
 
 const configOptionBase = {

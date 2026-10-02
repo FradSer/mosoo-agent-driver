@@ -92,13 +92,15 @@ export type AcpCancelledTurnBarrier = (context: AgentDriverContext) => Promise<v
 export class AcpTurnController {
   #active: ActiveAcpTurn | null = null;
   readonly #cancelledTurnBarrier: AcpCancelledTurnBarrier;
-  readonly events = new AcpTurnEventState();
+  readonly events: AcpTurnEventState;
   readonly #push: AcpTurnEventPush;
 
   constructor(
     push: AcpTurnEventPush,
     cancelledTurnBarrier: AcpCancelledTurnBarrier = async () => {},
+    transcriptOptions: { allowAnonymousFinalMessage?: boolean } = {},
   ) {
+    this.events = new AcpTurnEventState(transcriptOptions);
     this.#push = push;
     this.#cancelledTurnBarrier = cancelledTurnBarrier;
   }

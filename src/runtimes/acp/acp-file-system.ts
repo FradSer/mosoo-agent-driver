@@ -2,8 +2,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { AgentDriverContext } from "../../core/agent-driver-backend";
-import { isRecord, raceWithAbort, readNonEmptyString, readNumber } from "./acp-types";
 import { AcpPathScope } from "./acp-path-scope";
+import { isRecord, raceWithAbort, readNonEmptyString, readNumber } from "./acp-types";
 
 interface AcpFileSystemOptions {
   readonly allowedRoots: readonly string[];
