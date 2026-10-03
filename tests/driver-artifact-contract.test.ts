@@ -242,7 +242,7 @@ describe("driver artifact contract", () => {
     const liveIndex = releaseWorkflow.indexOf("- name: Test packed driver");
     const imageIndex = releaseWorkflow.indexOf("- name: Build image");
 
-    expect(openCodeVersion).toBe("1.18.4");
+    expect(openCodeVersion).toBe("1.18.25");
     expect(containerfile).toContain(`ARG OPENCODE_VERSION=${openCodeVersion}`);
     expect(releaseWorkflow).toContain("AGENT_DRIVER_LIVE_ARTIFACT: packed/dist/driver.mjs");
     expect(releaseWorkflow).toContain("--strip-components=1");

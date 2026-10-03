@@ -1,13 +1,13 @@
 ARG BUN_VERSION=1.4.0
 FROM docker.io/oven/bun:${BUN_VERSION}@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS bun-runtime
 
-FROM docker.io/cloudflare/sandbox:0.12.6@sha256:862aa35be41b1b56bc27acd66931c8ae668fce12ed401ecb2e5a83bcde41a3e6
+FROM docker.io/cloudflare/sandbox:0.12.9@sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6490a3a4c0226274ae4c1cca4948e85fe
 
 # Keep this pin in sync with downstream mosoo apps/api/package.json -> @cloudflare/sandbox.
-ARG CLAUDE_AGENT_SDK_VERSION=0.3.211
+ARG CLAUDE_AGENT_SDK_VERSION=0.3.257
 ARG BUN_VERSION
 ARG OPENAI_RUNTIME_VERSION=0.144.5
-ARG OPENCODE_VERSION=1.18.4
+ARG OPENCODE_VERSION=1.18.25
 ARG PI_ACP_VERSION=0.0.34
 ARG PI_VERSION=1.0.0
 

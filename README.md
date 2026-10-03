@@ -163,6 +163,14 @@ vp run check
 vp run clean
 ```
 
+The default image profile is `all`; single-runtime hosts select `RUNTIME=claude`,
+`openai`, `opencode` or `pi` at build time. Common tool layers are shared, and
+unrelated runtime executables/packages are absent from single-runtime images.
+CI builds every profile declared in `runtime-images.json` and verifies real
+native shell tools using deterministic loopback replies with networking disabled.
+See [upstream compatibility and review scope](docs/upstream-compatibility.md)
+for the selected image/dependency updates and retained protocol-6 boundaries.
+
 `vp run build:image` uses Buildah to produce a local `agent-driver:local` OCI image and installs `dist/driver.mjs` on the image `PATH` as `agent-driver`.
 
 The image contract in `environment-package-managers.json` exposes `npm` and `pip` to Mosoo Environment writes. The image build verifies that each tool is executable, reports a valid version, and resolves through coherent Python/pip aliases. `vp run docker:smoke:environment` installs and executes one pinned package through each manager using the same isolated-prefix mode as Mosoo Environment artifacts.

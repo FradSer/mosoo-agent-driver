@@ -54,3 +54,20 @@ Current-source checks:
 - Fresh independent review found no remaining P0–P2 findings in product admission, credential/model presentation, local proxy boundaries, event conversion and Pi command restrictions.
 
 Latest Driver main `fd87f89c649cb7b7f81432375b67aa5401388bcb` contains a protocol-3 refactor incompatible with the Mosoo-fixed protocol-6 line. The dry-run merge reports 94 conflicts. Resolving the protocol direction remains necessary before upstream merge; the draft is not merge-ready. Deployed Cloudflare acceptance, other providers/models and a green macOS full Driver process-lifecycle suite remain unverified.
+
+## Compatible upstream image update — 2026-10-03
+
+[Upstream compatibility and review scope](upstream-compatibility.md) records the selected changes from `fd87f89`, reviewed relative to Mosoo's fixed protocol-6 Driver. The protocol/runtime source files are unchanged in this update. Pi 1.0.0 / pi-acp 0.0.34 and Codex's aligned 0.144.5 contract are retained. Cloudflare image and API SDK advance together to 0.12.9; Claude Agent SDK to 0.3.257, Anthropic API SDK to 0.123.0 and OpenCode to 1.18.25. PR and release Action references use upstream exact SHAs; release triggers, permissions and publishing logic are unchanged.
+
+Evidence under `/private/tmp/mosoo-pi-upstream-20261003`:
+
+- `linux-verified.log`: formatting, lint, typecheck and build passed; **1,356 passed / 45 expected skips / zero failures**; six actual pinned Pi contracts; old-to-new native migration with 20 assertions; packed stateful MCP with 24 assertions. OpenCode package setup requires its platform-selecting postinstall; the initial verification's disabled installation scripts caused ENOEXEC and were corrected without weakening tests.
+- The subsequent Action-pinning regression was RED before the release fix. `action-pins-green.log`: **21 focused tests passed / zero failures**; `action-linux-verified.log`: the new Action case independently passed on Linux; `driver-tc-final.log`: current test/source typecheck passed. The full Linux count above precedes that one new configuration test.
+- Host whole-workspace formatting/lint/typecheck and **1,228 API tests** passed. The SDK 0.12.9 network contract has 15 passing assertions, retaining Containers 0.3.7 and credential proxy/start-time/persisted egress semantics. Existing D1 migrations applied only to isolated local state.
+- `image-{claude,openai,opencode,pi,all}.log`: all five actual Cloudflare images passed selected-package/CLI admission, real isolated-prefix npm/pip installation and real native shell execution with external networking disabled. The all image executed all four runtimes. These are local Docker images, not hosted Cloudflare deployment acceptance.
+- `product-e2e.log`: complete local Worker public-API Agent publication, Project API key, Thread, actual SandboxPi provisioning and real model completion passed in **25.8s**; the terminal path completed a workspace checkpoint.
+- `real-cold-e2e.log`: current packed image passed real file write/read, usage and fresh-Driver native memory restoration without tools. Four HTTP 200 provider requests passed through actual Mosoo proxy/grant/generation/vault modules using temporary SQLite/D1 fixtures; the grant was absent from persisted Pi home.
+- Current Pi image `cloudflare-dev/sandboxpi:ba1b5ee9` contains artifact SHA-256 `2e0475d7bdeab33c3202bc52dd89524e4d20e27442173bbc00f937f1d857fe06`. Earlier hashes/results certify their earlier artifacts only.
+- Fresh independent review confirmed unchanged Pi/protocol-6/canonical-URL boundaries and closed the release Action pin finding; no new P0–P2 finding remained.
+
+The main-target draft retains a protocol-lineage merge conflict. The fixed-baseline compare link isolates the actual Pi/image contribution; it does not claim main mergeability. Codex/generated-protocol and remaining protocol-3 dependency/toolchain changes are explicitly excluded. No cloud deployment, production database write or package release was performed.

@@ -7,6 +7,40 @@ import { SUPPORTED_DRIVER_RUNTIMES } from "../src/protocol/runtime";
 
 const containerfile = readFileSync(new URL("../Containerfile", import.meta.url), "utf8");
 describe("runtime image coverage", () => {
+  test("Given privileged release workflows, When external actions run, Then every action is pinned to an immutable revision", () => {
+    for (const name of ["pr.yml", "release.yml"]) {
+      const workflow = readFileSync(
+        new URL(`../.github/workflows/${name}`, import.meta.url),
+        "utf8",
+      );
+      const actions = [...workflow.matchAll(/uses:\s+([^\s#]+)/g)].map((match) => match[1]);
+      expect(actions.length).toBeGreaterThan(0);
+      for (const action of actions) expect(action).toMatch(/^[^@]+@[0-9a-f]{40}$/);
+    }
+  });
+
+  test("Given all manifest profiles, When CI validates images, Then Pi and every selected runtime execute offline native tools", () => {
+    const workflow = readFileSync(new URL("../.github/workflows/pr.yml", import.meta.url), "utf8");
+    expect(workflow).toContain("for runtime in all $(node");
+    expect(workflow).toContain("image.profile");
+    expect(workflow).toContain('--build-arg "RUNTIME=$runtime"');
+    expect(workflow).toContain("runtime-image-check.mjs");
+    expect(workflow).toContain("environment-package-manager-check.mjs smoke");
+    expect(workflow).toContain("--network none");
+    expect(workflow).toContain("runtime-image-tools-smoke.mjs");
+  });
+
+  test("Given compatible upstream image pins, When building, Then Claude and OpenCode match their tested packages", () => {
+    const { dependencies, devDependencies } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    expect(dependencies["@anthropic-ai/claude-agent-sdk"]).toBe("0.3.257");
+    expect(devDependencies["opencode-ai"]).toBe("1.18.25");
+    expect(containerfile).toContain("ARG CLAUDE_AGENT_SDK_VERSION=0.3.257");
+    expect(containerfile).toContain("ARG OPENCODE_VERSION=1.18.25");
+    expect(containerfile).toContain("docker.io/cloudflare/sandbox:0.12.9@sha256:");
+  });
+
   // Given a selected image profile, when it is built, then only its pinned
   // runtime is installed; all retains OpenCode alongside the new Pi adapter.
   test("Given Pi v1.0.0, when selecting an image, then the adapter and CLI pins retain the OpenCode fallback", () => {
