@@ -1,6 +1,7 @@
 import type {
   DriverBootMcpServer,
   DriverExecutionEnvironment,
+  DriverExecutionSessionContext,
   DriverExecutionSpec,
   DriverNativeRuntimeRef,
   DriverPermissionPolicy,
@@ -17,11 +18,11 @@ export interface DriverExecutionRunInput {
 
 export interface DriverExecutionSessionInput {
   readonly additionalDirectories: string[];
+  readonly context: DriverExecutionSessionContext;
   readonly cwd: string;
   readonly homePath: string;
   readonly mcpServers: DriverBootMcpServer[];
   readonly nativeResumeRef: DriverNativeRuntimeRef | null;
-  readonly nativeResumeRequired?: boolean | undefined;
   readonly recoveryMessages: DriverRecoveryMessage[];
   readonly sharedRootPath: string;
 }
@@ -56,11 +57,11 @@ export function createDriverExecutionInputFromBootExecution(
     },
     session: {
       additionalDirectories: execution.session.additionalDirectories,
+      context: execution.session.context,
       cwd: execution.session.cwd,
       homePath: execution.session.context.homePath,
       mcpServers: execution.session.mcpServers,
       nativeResumeRef: execution.session.nativeResumeRef,
-      nativeResumeRequired: execution.session.nativeResumeRequired ?? false,
       recoveryMessages: execution.session.recoveryMessages,
       sharedRootPath: execution.session.context.sessionOrganizationPath,
     },

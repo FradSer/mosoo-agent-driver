@@ -6,7 +6,7 @@ FROM docker.io/cloudflare/sandbox:0.12.9@sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6
 # Keep this pin in sync with downstream mosoo apps/api/package.json -> @cloudflare/sandbox.
 ARG CLAUDE_AGENT_SDK_VERSION=0.3.257
 ARG BUN_VERSION
-ARG OPENAI_RUNTIME_VERSION=0.144.5
+ARG OPENAI_RUNTIME_VERSION=0.152.0
 ARG OPENCODE_VERSION=1.18.25
 ARG PI_ACP_VERSION=0.0.34
 ARG PI_VERSION=1.0.0

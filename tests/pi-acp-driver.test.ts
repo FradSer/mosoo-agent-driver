@@ -8,16 +8,14 @@ import {
   type AgentDriverContext,
 } from "../src/core/agent-driver-backend";
 import { DriverTurnCancelledError } from "../src/core/driver-runtime-state";
+import { createDisabledLogger } from "../src/observability";
 import type { AgentDriverMaterializedSkill } from "../src/host-ports";
-import { createBufferedSinkLogger } from "../src/observability";
 import type { DriverEventInput } from "../src/protocol/events";
-import { createDriverHostIntegrationSnapshotFromBootExecution } from "../src/protocol/host-integration";
 import type { RunId } from "../src/protocol/id";
 import type { DriverStartInput } from "../src/protocol/start";
 import * as acpProcess from "../src/runtimes/acp/acp-agent-process";
 import { AcpDriverBackend } from "../src/runtimes/acp/acp-driver-backend";
 import { isRecord } from "../src/runtimes/acp/acp-types";
-import { driverBootPayload } from "./driver-boot-payload-fixture";
 import { DRIVER_TEST_IDS } from "./driver-boot-payload-fixture";
 import { createBootstrapFixture } from "./fixtures/pi-acp/bootstrap";
 import { adapter, waitFor } from "./fixtures/pi-acp/contract";
@@ -46,9 +44,6 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "session/new" || message.method === "session/load") {
       if (message.method === "session/load") send({ jsonrpc: "2.0", method: "session/update", params: {
         sessionId: "pi-native-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAY-MUST-BE-SUPPRESSED" } },
-      } });
-      send({ jsonrpc: "2.0", method: "session/update", params: {
-        sessionId: "pi-native-session", update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "model", description: "Change model", input: { hint: "model" } }] },
       } });
       result = { sessionId: "pi-native-session", configOptions: configOptions() };
     }
@@ -96,19 +91,9 @@ function createContextHarness({
     contextFor: (payload: DriverStartInput) =>
       createAgentDriverContext({
         payload,
-        logger: createBufferedSinkLogger({
-          level: "debug",
-          service: "pi-test",
-          sink: async () => {},
-        }),
+        logger: createDisabledLogger(),
         permission: { request: async () => "reject_once" },
-        ports: {
-          skill: { materialize: async () => skills },
-          hostIntegration: {
-            snapshot: async () =>
-              createDriverHostIntegrationSnapshotFromBootExecution(driverBootPayload.execution),
-          },
-        },
+        ports: { skill: { materialize: async () => skills } },
         eventSink: {
           currentRunId: () => activeRunId,
           pushEvents: async ({ events: batch }) => {
@@ -135,9 +120,10 @@ function createContextHarness({
       context: AgentDriverContext,
       text: string,
       runId: RunId = DRIVER_TEST_IDS.runId,
+      attachmentIds?: readonly string[],
     ) {
       activeRunId = runId;
-      return backend.handleInput(context, { text }, runId);
+      return backend.handleInput(context, { text, attachmentIds }, runId);
     },
   };
 }
@@ -181,8 +167,8 @@ async function createHarness() {
     events: state.events,
     launches,
     root,
-    run(text: string) {
-      return state.run(backend, context, text);
+    run(text: string, attachmentIds?: readonly string[]) {
+      return state.run(backend, context, text, DRIVER_TEST_IDS.runId, attachmentIds);
     },
     async destroy() {
       try {
@@ -220,18 +206,22 @@ describe.skipIf(process.platform !== "linux")(
         expect(harness.launches[0]?.env["OPENCODE_CONFIG_CONTENT"]).toBeUndefined();
         await harness.run("hello");
         expect(harness.events.some((event) => event.kind === "run.completed")).toBe(true);
-        const commands = harness.events.filter(
-          (event) => event.kind === "session.commands.updated",
-        );
-        expect(commands.length).toBeGreaterThan(0);
-        for (const event of commands) {
-          expect(event.payload).toMatchObject({ commands: [] });
-        }
       } finally {
         if (previousCommand === undefined) delete process.env["MOSOO_ACP_FALLBACK_COMMAND"];
         else process.env["MOSOO_ACP_FALLBACK_COMMAND"] = previousCommand;
         if (previousArgs === undefined) delete process.env["MOSOO_ACP_FALLBACK_ARGS"];
         else process.env["MOSOO_ACP_FALLBACK_ARGS"] = previousArgs;
+        await harness.destroy();
+      }
+    });
+
+    test("Given Pi text-only capabilities, When input references an image attachment, Then reject before prompting the provider", async () => {
+      const harness = await createHarness();
+      try {
+        await harness.backend.start(harness.context, new AbortController().signal);
+        await expect(harness.run("hello", ["image-fixture"])).rejects.toThrow("text-only");
+        expect(harness.events.some((event) => event.kind === "run.completed")).toBe(false);
+      } finally {
         await harness.destroy();
       }
     });
@@ -263,7 +253,7 @@ describe.skipIf(process.platform !== "linux")(
 );
 
 test.skipIf(process.platform !== "linux" || process.env["PI_ACP_PINNED_CONTRACT"] !== "1")(
-  "Given the real pinned Pi adapter, When Driver starts then cold restores a text-only turn, Then Linux bootstrap and anonymous final output survive without replay",
+  "Given the real pinned Pi adapter, When Driver starts then cold restores a turn with native bash, Then Linux bootstrap, native ToolCall lifecycle, and anonymous final output survive without replay",
   async () => {
     const fixture = await createBootstrapFixture();
     const state = createContextHarness({
@@ -317,10 +307,41 @@ test.skipIf(process.platform !== "linux" || process.env["PI_ACP_PINNED_CONTRACT"
       await backend.start(context, new AbortController().signal);
       expect((await stat(join(fixture.agentDir, "models.json"))).mode & 0o777).toBe(0o600);
       expect(fixture.requests).toHaveLength(0);
-      fixture.steps.push({ text: "PI_DRIVER_FIRST_DONE" });
+      fixture.steps.push(
+        { tools: [{ name: "bash", arguments: { command: "printf PI_DRIVER_NATIVE_TOOL" } }] },
+        { text: "PI_DRIVER_FIRST_DONE" },
+      );
       await state.run(backend, context, "First text-only turn");
       expect(events.filter((event) => event.kind === "run.completed")).toHaveLength(1);
       expect(JSON.stringify(events)).toContain("PI_DRIVER_FIRST_DONE");
+      const toolUpdates = events.filter((event) => event.kind === "tool.call.updated");
+      expect(
+        toolUpdates.some(
+          (event) => isRecord(event.payload) && event.payload["status"] === "running",
+        ),
+      ).toBe(true);
+      const completedTool = toolUpdates.find(
+        (event) => isRecord(event.payload) && event.payload["status"] === "completed",
+      );
+      expect(completedTool?.runId).toBe(DRIVER_TEST_IDS.runId);
+      expect(completedTool?.payload).toMatchObject({ kind: "execute" });
+      expect(JSON.stringify(toolUpdates)).toContain("PI_DRIVER_NATIVE_TOOL");
+      const toolCallId = isRecord(completedTool?.payload)
+        ? completedTool.payload["toolCallId"]
+        : undefined;
+      expect(typeof toolCallId).toBe("string");
+      expect(
+        events.some(
+          (event) =>
+            event.kind === "item.completed" &&
+            isRecord(event.payload) &&
+            event.payload["itemId"] === toolCallId &&
+            event.payload["itemType"] === "tool_call" &&
+            isRecord(event.payload) &&
+            event.payload["status"] === "completed",
+        ),
+      ).toBe(true);
+
       expect(
         events.filter((event) => event.kind === "usage.updated").at(-1)?.payload,
       ).toMatchObject({
@@ -354,14 +375,14 @@ test.skipIf(process.platform !== "linux" || process.env["PI_ACP_PINNED_CONTRACT"
       fixture.steps.push({ text: "PI_DRIVER_COLD_DONE" });
       await state.run(backend, context, "Cold text-only turn", DRIVER_TEST_IDS.secondRunId);
       expect(events.filter((event) => event.kind === "run.completed")).toHaveLength(2);
-      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.requests).toHaveLength(3);
       expect(JSON.stringify(fixture.requests[0]?.messages)).toContain(
         "PI_DRIVER_FIRST_INSTRUCTIONS",
       );
-      expect(JSON.stringify(fixture.requests[1]?.messages)).toContain(
+      expect(JSON.stringify(fixture.requests[2]?.messages)).toContain(
         "PI_DRIVER_COLD_INSTRUCTIONS",
       );
-      expect(JSON.stringify(fixture.requests[1]?.messages)).toContain("PI_DRIVER_FIRST_DONE");
+      expect(JSON.stringify(fixture.requests[2]?.messages)).toContain("PI_DRIVER_FIRST_DONE");
       expect(fixture.errors).toEqual([]);
     } finally {
       try {

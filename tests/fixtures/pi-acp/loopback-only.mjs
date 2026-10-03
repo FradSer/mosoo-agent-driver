@@ -1,6 +1,6 @@
-import fs from "node:fs";
 // Loaded only into pinned contract children. Fail closed before non-loopback TCP.
 import net from "node:net";
+import fs from "node:fs";
 const original = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (...args) {
   const normalized = net._normalizeArgs(args);

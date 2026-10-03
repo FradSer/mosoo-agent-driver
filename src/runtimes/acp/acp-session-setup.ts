@@ -7,7 +7,6 @@ import type {
   ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 
-import type { DriverExecutionSessionContext } from "../../protocol/boot";
 import type { DriverStartInput } from "../../protocol/start";
 import {
   buildMcpServers,
@@ -18,14 +17,13 @@ import {
   supportsSessionResume,
   toRequestMeta,
 } from "./acp-configuration";
+import { readPiModelId, readPiThinkingLevel } from "./pi-acp-bootstrap";
 import { isRecord } from "./acp-types";
 import type { JsonObject } from "./acp-types";
-import { readPiModelId, readPiThinkingLevel } from "./pi-acp-bootstrap";
 
 export type AcpSessionSetupMode = "created" | "loaded" | "resumed";
 
 export interface AcpSessionSetup {
-  readonly droppedAdditionalDirectories: readonly string[];
   readonly mode: AcpSessionSetupMode;
   readonly raw: JsonObject;
   readonly sessionId: string;
@@ -36,7 +34,6 @@ interface AcpSessionSetupInput {
   readonly connection: ClientContext;
   readonly currentSessionId: string | null;
   readonly payload: DriverStartInput;
-  readonly sessionContext: DriverExecutionSessionContext;
   replaySession<T>(operation: () => Promise<T>): Promise<T>;
 }
 
@@ -128,20 +125,15 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
   const mcpServers = buildMcpServers(input.payload);
   assertMcpSupport(input.agentCapabilities, mcpServers);
   const existingSessionId = input.currentSessionId;
-  const requestedAdditionalDirectories = input.payload.execution.session.additionalDirectories;
+  const additionalDirectories = input.payload.execution.session.additionalDirectories;
 
-  // Agents that do not advertise sessionCapabilities.additionalDirectories
-  // (OpenCode never has) used to receive the field anyway and silently ignore
-  // it. Failing the whole session here turns that long-standing silent
-  // degradation into an outage, so drop the directories instead and let the
-  // caller surface the degradation.
-  const supportsDirs = supportsAdditionalDirs(input.agentCapabilities);
-  const additionalDirectories = supportsDirs ? requestedAdditionalDirectories : [];
-  const droppedAdditionalDirectories = supportsDirs ? [] : requestedAdditionalDirectories;
+  if (additionalDirectories.length > 0 && !supportsAdditionalDirs(input.agentCapabilities)) {
+    throw new Error("ACP agent does not advertise additionalDirectories support.");
+  }
 
   const baseParams = {
     _meta: toRequestMeta({
-      sessionContext: input.sessionContext,
+      sessionContext: input.payload.execution.session.context,
     }),
     ...(additionalDirectories.length === 0 ? {} : { additionalDirectories }),
     cwd: input.payload.execution.session.cwd,
@@ -168,7 +160,6 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
     }
 
     return configurePiSession(input, {
-      droppedAdditionalDirectories,
       mode: "resumed",
       raw: isRecord(result) ? result : {},
       sessionId: existingSessionId,
@@ -182,7 +173,6 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
         input.connection.request(acpMethods.agent.session.load, params),
       );
       return configurePiSession(input, {
-        droppedAdditionalDirectories,
         mode: "loaded",
         raw: isRecord(result) ? result : {},
         sessionId: existingSessionId,
@@ -190,8 +180,8 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
     });
   }
 
-  if (existingSessionId !== null && input.payload.execution.session.nativeResumeRequired === true) {
-    throw new Error("ACP provider does not support restoring the required native session.");
+  if (existingSessionId !== null) {
+    throw new Error("ACP agent cannot restore the requested native session.");
   }
 
   const result = await input.connection.request(acpMethods.agent.session.new, baseParams);
@@ -201,7 +191,6 @@ export async function setupAcpSession(input: AcpSessionSetupInput): Promise<AcpS
   }
 
   return configurePiSession(input, {
-    droppedAdditionalDirectories,
     mode: "created",
     raw: isRecord(result) ? result : {},
     sessionId: result.sessionId,

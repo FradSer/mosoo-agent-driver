@@ -2,6 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { assertProtocolAdmission, compareTimestamps, type ProtocolAdmissionLimits } from "./common";
 import { contentExtensionNames, hasBlobRef } from "./content";
+import type { Interaction, Item, Run, Session, SessionSnapshot } from "./state";
+import { sessionSnapshotSchema } from "./state";
 import { stateContent } from "./content-admission";
 import {
   assertNotAfter,
@@ -18,8 +20,6 @@ import {
   RUN_STATUS_TRANSITIONS,
   SESSION_STATUS_TRANSITIONS,
 } from "./invariant";
-import type { Interaction, Item, Run, Session, SessionSnapshot } from "./state";
-import { sessionSnapshotSchema } from "./state";
 
 function assertAcyclicRunRelation(
   runs: readonly Run[],
@@ -135,7 +135,14 @@ function assertRunTransition(previous: Run | undefined, next: Run): void {
     "Run origin fields cannot change.",
   );
 
-  for (const key of ["cachedInput", "input", "output", "reasoning", "total"] as const) {
+  for (const key of [
+    "cachedInput",
+    "cachedWrite",
+    "input",
+    "output",
+    "reasoning",
+    "total",
+  ] as const) {
     const prior = previous.usage?.[key];
 
     if (prior === undefined) {

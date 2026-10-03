@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { DriverPermissionRequest } from "../src/core/driver-permission-broker";
+import type { DriverPermissionRequest } from "../src/host-ports";
 import {
   createDriverPermissionRequestHandler,
   isDriverFullAccess,
@@ -50,15 +50,12 @@ describe("driver permission policy", () => {
     expect(() => parseDriverBootPayload(raw)).toThrow(/permissionPolicy/);
   });
 
-  test.each([1, 2, 3, 4, 5])(
-    "reader rejects legacy Driver protocol %s before it can run work",
-    (version) => {
-      const legacyPayload: Record<string, unknown> = structuredClone(driverBootPayload);
-      legacyPayload["protocolVersion"] = version;
+  test("reader rejects the legacy Driver protocol before it can run external tools", () => {
+    const legacyPayload: Record<string, unknown> = structuredClone(driverBootPayload);
+    legacyPayload["protocolVersion"] = 1;
 
-      expect(() => parseDriverBootPayload(legacyPayload)).toThrow(/protocolVersion must be 6/);
-    },
-  );
+    expect(() => parseDriverBootPayload(legacyPayload)).toThrow(/protocolVersion must be 3/);
+  });
 
   test("isDriverFullAccess reflects the payload", () => {
     expect(isDriverFullAccess(startInputWithPolicy("full_access"))).toBe(true);
@@ -77,6 +74,28 @@ describe("driver permission policy", () => {
 
     await expect(handler(SAMPLE_REQUEST)).resolves.toBe("allow_once");
     expect(supervisedCalls).toBe(0);
+  });
+
+  test("full_access preserves a user-configured ask rule", async () => {
+    const seen: DriverPermissionRequest[] = [];
+    const handler = createDriverPermissionRequestHandler({
+      payload: startInputWithPolicy("full_access"),
+      supervised: async (request) => {
+        seen.push(request);
+        return "reject_once";
+      },
+    });
+    const request = {
+      ...SAMPLE_REQUEST,
+      matchedAskRule: {
+        ruleContent: "Bash(*)",
+        source: "project",
+        toolName: "Bash",
+      },
+    };
+
+    await expect(handler(request)).resolves.toBe("reject_once");
+    expect(seen).toEqual([request]);
   });
 
   test("supervised delegates to the interactive handler", async () => {

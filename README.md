@@ -72,11 +72,6 @@ Different model vendors ship different agent runtimes — the Claude Agent SDK, 
 - `@mosoo/agent-driver/cma-http`: experimental, unsupported CMA-shaped HTTP handler.
 - `@mosoo/agent-driver/cma-sdk`: experimental, unsupported CMA-shaped client.
 
-Boot protocol 6 no longer requires or exposes the retired `sandboxKind` label.
-The host still supplies actual Sandbox/Session ownership, and an Agent preset
-reference is optional. Boot parsing and the control handshake reject earlier
-protocol versions before work begins; deploy the matching host and Driver together.
-
 ## Runtime Contract
 
 The Contract is the vendor-neutral state and control boundary between the host and provider executors.
@@ -107,7 +102,7 @@ import { expect, test } from "bun:test";
 
 import { createCmaMemoryStore } from "@mosoo/agent-driver";
 import { createCmaHttpHandler } from "@mosoo/agent-driver/cma-http";
-import { createCmaSdkClient } from "@mosoo/agent-driver/cma-sdk";
+import { CmaSdkClient } from "@mosoo/agent-driver/cma-sdk";
 
 test("create an agent, environment, and session over the CMA surface", async () => {
   // 1. An in-memory store stands in for the host's persistence port.
@@ -124,7 +119,7 @@ test("create an agent, environment, and session over the CMA surface", async () 
   // 3. The client talks to the handler directly through fetch — point
   //    baseUrl at a server that explicitly embeds this preview. The default beta header
   //    (anthropic-beta: managed-agents-2026-04-01) is sent automatically.
-  const client = createCmaSdkClient({
+  const client = new CmaSdkClient({
     baseUrl: "https://driver.local",
     fetch: async (input, init) => handler(new Request(input, init)),
   });
@@ -163,24 +158,48 @@ vp run check
 vp run clean
 ```
 
-The default image profile is `all`; single-runtime hosts select `RUNTIME=claude`,
-`openai`, `opencode` or `pi` at build time. Common tool layers are shared, and
-unrelated runtime executables/packages are absent from single-runtime images.
-CI builds every profile declared in `runtime-images.json` and verifies real
-native shell tools using deterministic loopback replies with networking disabled.
-See [upstream compatibility and review scope](docs/upstream-compatibility.md)
-for the selected image/dependency updates and retained protocol-6 boundaries.
+`vp run build:image` uses Buildah to produce a local linux/amd64 `agent-driver:local` OCI image and installs `dist/driver.mjs` on the image `PATH` as `agent-driver`.
 
-`vp run build:image` uses Buildah to produce a local `agent-driver:local` OCI image and installs `dist/driver.mjs` on the image `PATH` as `agent-driver`.
+Single-runtime hosts build the same Containerfile with `--build-arg RUNTIME=claude`,
+`openai`, `opencode`, or `pi`. These profiles preinstall only the selected native CLI;
+the default `all` preserves existing consumers and the published all-runtime image.
+Bun, Node, Python, npm, and pip remain available in every profile. For Cloudflare
+Wrangler builds, set `image_vars = { RUNTIME = "claude" }` (or the matching profile)
+on the container class. Pin the chosen class with the workspace identity so
+restore and teardown cannot accidentally select a different Durable Object.
+No package installation occurs when selecting a profile at runtime.
 
-The image contract in `environment-package-managers.json` exposes `npm` and `pip` to Mosoo Environment writes. The image build verifies that each tool is executable, reports a valid version, and resolves through coherent Python/pip aliases. `vp run docker:smoke:environment` installs and executes one pinned package through each manager using the same isolated-prefix mode as Mosoo Environment artifacts.
+`/etc/mosoo/runtime` and the `ai.mosoo.runtime` image label identify the build.
+The build and PR checks run `scripts/runtime-image-check.mjs` inside every profile
+to verify the chosen CLI, absence of unrelated runtime packages, and shared tools.
+PR checks also install and execute a real npm and pip package in every image.
+They run the selected native CLI through a real shell tool round trip against a
+deterministic loopback model fixture with external networking disabled. This
+checks executable behavior, not model quality or production TTFT.
+
+The Pi profile pins `pi-acp@0.0.34` and `@earendil-works/pi-coding-agent@1.0.0`.
+Its image check validates the actual ACP initialize capabilities without creating
+a session or calling a model. The fixed `mosoo-pi` launcher disables extensions
+and prompt templates; the adapter owns RPC/session arguments and global resource
+admission. OpenCode remains the default ACP fallback in `all`.
+
+When integrating a runtime, add its backend and protocol entry together with an
+entry in `runtime-images.json`, its Containerfile installation, and a native
+tool fixture in `scripts/runtime-image-tools-smoke.mjs`. The manifest drives
+the CI image loop and in-image presence checks; the unit gate requires exact
+coverage of both admitted runtimes and executable backends. A new profile must
+build alone and in `all`, omit unrelated CLIs, keep shared tools, and return a
+real shell result to the model fixture. Hosts add their runtime-to-namespace
+mapping, DO exports, bindings, and additive migrations in the same integration.
+Existing workspace bindings remain immutable.
+
+The image contract in `environment-package-managers.json` exposes `npm` and `pip` to Mosoo Environment writes. The image build verifies that each tool is executable, reports a valid version, and resolves through coherent Python/pip aliases. `vp run test:image:environment` installs and executes one pinned package through each manager using the same isolated-prefix mode as Mosoo Environment artifacts.
 
 ## Boundaries
 
 - The Driver Kernel owns command dispatch, runtime event emission, provider lifecycle, permission flow, diagnostics, and host port contracts.
 - Host applications own credential, file, skill, MCP, policy, logging, persistence, and transport implementations.
 - Provider backends depend on Driver contracts and host ports only.
-- Hosts that checkpoint native state set `execution.session.nativeResumeRequired` to preserve native continuation. When a reference exists, missing or unsupported native state must fail instead of creating a replacement conversation. Protocol 6 carries this requirement and permits explicit null Agent provenance for direct Sessions; API and Driver must be updated together. A Session without an Agent cannot claim an Agent deployment revision. Omission retains the generic host's existing best-effort recovery behavior. Bounded role/text replay is not equivalent to a complete native checkpoint.
 - The library root is safe to import and must not start the process runner.
 - The package must not depend on mosoo workspace packages at runtime.
 - mosoo control traffic uses the outbound ORPC WebSocket to `DriverInstance`; the Driver does not expose a sandbox-local control listener.
@@ -190,10 +209,20 @@ The image contract in `environment-package-managers.json` exposes `npm` and `pip
 
 - `vp run check`
 - `vp run build:image`
-- `vp run docker:smoke:environment`
+- `vp run test:image:environment`
 - no `@mosoo/*` runtime dependencies in `package.json`
 - public entries include typed exports
 - live artifact tests are gated by environment credentials
+
+## OpenAI Credential Boundary
+
+Each OpenAI app-server process receives a private temporary `CODEX_HOME` that is deleted only after its supervised process tree stops.
+
+OpenAI persistence in the session home is limited to native rollout, memory, and SQLite state.
+
+It must never contain `auth.json` or be used as a credential archive.
+
+The Driver fails closed when it finds legacy credentials there and accepts OpenAI API-key auth only from the current execution environment.
 
 ## Artifact Live Tests
 
@@ -229,12 +258,8 @@ Protocol-only races such as ACP load replay barriers, burst updates, and event-d
 - `vp run test:live:opencode` runs all configured OpenCode compatibility models plus one representative lifecycle model.
 - `vp run test:live:artifact` tests the artifact path supplied by `AGENT_DRIVER_LIVE_ARTIFACT` without rebuilding it.
 
-The release workflow extracts the packed NPM archive to `packed/` and blocks image and package publication unless `packed/dist/driver.mjs` passes the complete matrix.
+The release workflow extracts the packed NPM archive to `packed/`, verifies its declarations, runs the provider-free MCP artifact test, and blocks image and package publication until the same `packed/dist/driver.mjs` passes the complete OpenAI, Claude, and OpenCode live matrix.
 
 ## License
 
 Licensed under the [Apache License 2.0](./LICENSE.txt).
-
-## Pi through ACP
-
-The additive `pi-acp` runtime uses the shared ACP backend and a managed Mosoo Chat Completions grant. See [the Pi integration contract](docs/pi-acp.md) for the exact package pair, protocol-6 port, capability limits and verification evidence.

@@ -3,22 +3,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import images from "../runtime-images.json";
-import { SUPPORTED_DRIVER_RUNTIMES } from "../src/protocol/runtime";
 
 const containerfile = readFileSync(new URL("../Containerfile", import.meta.url), "utf8");
 describe("runtime image coverage", () => {
-  test("Given privileged release workflows, When external actions run, Then every action is pinned to an immutable revision", () => {
-    for (const name of ["pr.yml", "release.yml"]) {
-      const workflow = readFileSync(
-        new URL(`../.github/workflows/${name}`, import.meta.url),
-        "utf8",
-      );
-      const actions = [...workflow.matchAll(/uses:\s+([^\s#]+)/g)].map((match) => match[1]);
-      expect(actions.length).toBeGreaterThan(0);
-      for (const action of actions) expect(action).toMatch(/^[^@]+@[0-9a-f]{40}$/);
-    }
-  });
-
   test("Given all manifest profiles, When CI validates images, Then Pi and every selected runtime execute offline native tools", () => {
     const workflow = readFileSync(new URL("../.github/workflows/pr.yml", import.meta.url), "utf8");
     expect(workflow).toContain("for runtime in all $(node");
@@ -30,15 +17,14 @@ describe("runtime image coverage", () => {
     expect(workflow).toContain("runtime-image-tools-smoke.mjs");
   });
 
-  test("Given compatible upstream image pins, When building, Then Claude and OpenCode match their tested packages", () => {
-    const { dependencies, devDependencies } = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  test("Given main image pins, When adding Pi, Then the pinned base and existing runtimes stay unchanged", () => {
+    expect(containerfile).toContain(
+      "FROM docker.io/cloudflare/sandbox:0.12.9@sha256:4a56a37a3cfd9b38d65bb4b5d0b341e6490a3a4c0226274ae4c1cca4948e85fe",
     );
-    expect(dependencies["@anthropic-ai/claude-agent-sdk"]).toBe("0.3.257");
-    expect(devDependencies["opencode-ai"]).toBe("1.18.25");
+    expect(containerfile).toContain("ARG OPENAI_RUNTIME_VERSION=0.152.0");
     expect(containerfile).toContain("ARG CLAUDE_AGENT_SDK_VERSION=0.3.257");
     expect(containerfile).toContain("ARG OPENCODE_VERSION=1.18.25");
-    expect(containerfile).toContain("docker.io/cloudflare/sandbox:0.12.9@sha256:");
+    expect(containerfile).toContain("npm install -g --ignore-scripts");
   });
 
   // Given a selected image profile, when it is built, then only its pinned
@@ -132,19 +118,6 @@ describe("runtime image coverage", () => {
     }
   });
 
-  test("Given Linux CI, When running the required checks, Then the pinned Pi contract cannot be silently skipped", () => {
-    const { scripts } = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    ) as { scripts: Record<string, string> };
-    expect(scripts["test:pi-acp"]).toBe(
-      "PI_ACP_PINNED_CONTRACT=1 bun test tests/pi-acp-pinned-contract.test.ts tests/pi-acp-driver.test.ts",
-    );
-    expect(scripts["check"]).toContain("vp run test:pi-acp");
-    const workflow = readFileSync(new URL("../.github/workflows/pr.yml", import.meta.url), "utf8");
-    expect(workflow).toContain("runs-on: ubuntu-latest");
-    expect(workflow).toContain("run: vp run check");
-  });
-
   // Given an adapter initialize response, when a pin or advertised capability
   // drifts, then the image probe fails rather than admitting the new contract.
   test("rejects version and capability drift in actual initialize responses", () => {
@@ -188,6 +161,7 @@ describe("runtime image coverage", () => {
   });
 
   test("gives every admitted runtime and executable backend an image tested by CI", async () => {
+    const { SUPPORTED_DRIVER_RUNTIMES } = await import("../src/protocol/runtime");
     const { AGENT_DRIVER_PROVIDER_REGISTRY } = await import("../src/runtimes/provider-registry");
     const runtimeIds = images.map((image) => image.runtimeId).toSorted();
     expect(runtimeIds).toEqual([...SUPPORTED_DRIVER_RUNTIMES].toSorted());

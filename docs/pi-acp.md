@@ -2,7 +2,7 @@
 
 ## Scope
 
-Adds the additive `pi-acp` runtime and transport to the Driver registry and boot/native-resume contracts. It uses the existing ACP backend, event translation, process supervision, and replay barriers. There is no Pi RPC backend or parallel event translator. OpenCode retains runtime/transport `acp-fallback`, its platform fallback command/arguments, and its existing capabilities.
+This port follows upstream `main` at `fd87f89c649cb7b7f81432375b67aa5401388bcb`, including protocol **3** and its durable SDK interfaces. It adds the additive `pi-acp` runtime and transport to the Driver registry and boot/native-resume contracts. It uses the existing ACP backend, event publication, process supervision, and durable terminal admission. There is no Pi RPC backend or parallel event translator. OpenCode retains runtime/transport `acp-fallback`, its platform fallback command/arguments, and its existing capabilities.
 
 This is a bounded, **full-access sandbox** integration, not a claim of complete Pi/ACP or Mosoo product support. The host must not offer capabilities marked unsupported below.
 
@@ -17,11 +17,11 @@ Both are exact devDependency and image pins. The image checks installed package 
 
 ## Pi v1.0.0 upgrade contract
 
-Given the exact Pi 1.0.0 / pi-acp 0.0.34 pair, when the fixed launcher starts ACP and the adapter starts Pi RPC, then every stdout frame remains JSON and the frozen model is selected before readiness. Given persisted native state, when a fresh Driver loads it, then instructions, skills, tools and conversation resume without stale resource execution. Given a running shell tool, when cancellation arrives, then no delayed side effect survives. These scenarios use the actual published packages in the pinned contract suite and production-image E2E.
+Given the exact Pi 1.0.0 / pi-acp 0.0.34 pair, when the fixed launcher starts ACP and the adapter starts Pi RPC, then every stdout frame remains JSON and the frozen model is selected before readiness. Given persisted native state, when a fresh Driver loads it, then instructions, skills, tools and conversation resume without stale resource execution. Given a running shell tool, when cancellation arrives, then no delayed side effect survives. These scenarios use the actual published packages in the pinned contract suite and production-image smoke checks.
 
 Pi 1.0.0 changes fullscreen TUI defaults, codemode image generation, OAuth and deferred MCP tool restoration. The upstream RPC implementation and wire docs are unchanged from 0.99.2. The fixed profile still disables project resources and extensions, verifies selected model/thinking settings and refreshes managed bootstrap files. New native features do not imply support in the frozen Driver profile: it still requires full access, text-only input, no MCP and no extra directories. Pi requires Node >=22.19.0.
 
-`bun run test:pi-acp` remains the required current-pair contract. The additional `bun run test:pi-upgrade` is a one-time migration gate: the Linux fixture image retains Pi 0.99.2 at `/opt/pi-previous/node_modules/.bin/pi` and sets `PI_ACP_PREVIOUS_PI_COMMAND` accordingly. Enabling this gate without that previous executable fails explicitly. It creates old native state, switches to the installed 1.0.0 executable and validates history, tools and refreshed instructions using the same persisted paths. Production images contain only the current Pi version.
+`bun run test:pi-acp` is the current-pair contract. The additional `bun run test:pi-upgrade` is a one-time migration gate: the Linux fixture image retains Pi 0.99.2 at `/opt/pi-previous/node_modules/.bin/pi` and sets `PI_ACP_PREVIOUS_PI_COMMAND` accordingly. Enabling this gate without that previous executable fails explicitly. It creates old native state, switches to the installed 1.0.0 executable and validates history, tools and refreshed instructions using the same persisted paths. Production images contain only the current Pi version.
 
 ## Proxy and frozen configuration
 
@@ -64,14 +64,12 @@ The raw exact-pair contract fixture verifies new/cold restored model requests co
 
 Concurrent Drivers must not share a Pi runtime home. The host's existing single-owner/generation fencing and immutable workspace binding are required; the adapter map is not a multiwriter database. Process-tree cleanup does not replace sandbox teardown for escaped descendants.
 
-## Verification and protocol-6 port
+## Verification on main
 
-This isolated contribution starts from the Driver revision fixed by Mosoo main `b0bf041d955e71b24ff19fd72cf015429308d25b`: Driver `6be35bad888462d6998c06aac7f215b4cf3406f2`, boot protocol 6. It retains hostIntegration snapshots, `nativeResumeRequired`, and the protocol-6 final-message event contract. Pi adds a generation field to the internal start input for structural grant admission; host HMAC verification remains authoritative.
+Given a valid managed grant and supported frozen configuration, when Pi starts, then it selects and verifies the single configured model before readiness. Given an unavailable native reference, when restoration fails, then startup fails without creating a replacement session. Given a completed turn, when a fresh Driver resumes the same Pi home and reference, then conversation memory survives without replayed output. Main's protocol-3 and durable SDK contracts remain authoritative.
 
-Given a valid managed grant and supported frozen configuration, when Pi starts, then it selects and verifies the single configured model before readiness. Given an unavailable required native reference, when restoration fails, then startup fails without creating a replacement session. Given a completed turn, when a fresh Driver resumes the same Pi home and reference, then conversation memory survives without tool reads. Existing deterministic tests express these scenarios; registry and boot-admission tests failed before the port and pass after implementation.
-
-Validation evidence for this port is kept in `/private/tmp/mosoo-pi-v1-iy3bso5_`. The previous protocol-3 results do not certify this protocol-6 artifact. See [the protocol-6 validation report](validation-protocol6.md) for completed checks and exact evidence.
+Run `bun run test:pi-acp` for the actual installed pair, `bun test tests/pi-*.test.ts` for focused admission and bootstrap regression tests, and the repository's `bun run check` gate before publishing. The production Pi image must also pass installed-package admission and native tool smoke. Previous protocol-6 results do not certify the current merge.
 
 ## Mosoo product integration
 
-The companion [Mosoo draft PR #654](https://github.com/langgenius/mosoo/pull/654) adds catalog admission, Cloudflare `SandboxPi` bindings/images, managed grant mapping, capability gating and checkpointed Pi-home persistence. Its local Worker public-API E2E creates and publishes an Agent, provisions an actual Cloudflare Sandbox, starts this packed Driver and completes a real provider turn through the Mosoo proxy. This is local Cloudflare infrastructure verification; deployed cloud acceptance remains unverified. Pi receives an empty additional-directory list. Ordinary supervised tool approvals, MCP, images and billed token/cost totals remain unsupported. Pi slash commands are neither advertised nor admitted because they could change the frozen host configuration.
+The companion [Mosoo draft PR #654](https://github.com/langgenius/mosoo/pull/654) contains catalog admission, Cloudflare `SandboxPi` bindings/images, managed grant mapping, capability gating and checkpointed Pi-home persistence for the prior protocol-6 Driver. Its Host must be adapted to main's protocol-3 interfaces before consuming this merge. See [upstream compatibility](upstream-compatibility.md). This Driver change alone does not certify current Mosoo public-API or deployed cloud execution. Ordinary supervised tool approvals, MCP, images, additional directories and billed token/cost totals remain unsupported.

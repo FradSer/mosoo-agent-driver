@@ -4,12 +4,12 @@ import {
   timestampSchema,
   type ProtocolAdmissionLimits,
 } from "./common";
-import { authorityContent } from "./content-admission";
-import { invariant, itemKey } from "./invariant";
 import type { AuthorityOperation, ProposedMutation } from "./mutation";
 import { proposedMutationSchema } from "./mutation";
 import type { SessionSnapshot } from "./state";
 import { interactionSchema, itemSchema, runSchema } from "./state";
+import { authorityContent } from "./content-admission";
+import { invariant, itemKey } from "./invariant";
 import { validateSessionSnapshot } from "./state-validation";
 
 function parseExecutorMutation(

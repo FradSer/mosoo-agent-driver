@@ -1,19 +1,11 @@
-import { describe, expect, test } from "bun:test";
-
 import { methods as acpMethods, RequestError } from "@agentclientprotocol/sdk";
 import type { AgentCapabilities, ClientContext } from "@agentclientprotocol/sdk";
+import { describe, expect, test } from "bun:test";
 
 import { setupAcpSession } from "../src/runtimes/acp/acp-session-setup";
-import { driverBootPayload, driverStartInput } from "./driver-boot-payload-fixture";
+import { driverStartInput } from "./driver-boot-payload-fixture";
 
 const EXISTING_SESSION_ID = "native-session-existing";
-const strictStartInput = {
-  ...driverStartInput,
-  execution: {
-    ...driverStartInput.execution,
-    session: { ...driverStartInput.execution.session, nativeResumeRequired: true },
-  },
-};
 
 const piPayload: typeof driverStartInput = {
   ...driverStartInput,
@@ -77,7 +69,6 @@ function setupInput(input: {
   return {
     ...input,
     payload: input.payload ?? driverStartInput,
-    sessionContext: driverBootPayload.execution.session.context,
   };
 }
 
@@ -87,7 +78,6 @@ describe("Pi ACP model selection", () => {
       const requests: Array<{ method: string; params: unknown }> = [];
       let replaying = false;
       const result = await setupAcpSession({
-        sessionContext: driverBootPayload.execution.session.context,
         agentCapabilities:
           mode === "resumed" ? { sessionCapabilities: { resume: {} } } : { loadSession: true },
         connection: connectionWith(async (method, params) => {
@@ -125,7 +115,6 @@ describe("Pi ACP model selection", () => {
     };
     const values: unknown[] = [];
     const result = await setupAcpSession({
-      sessionContext: driverBootPayload.execution.session.context,
       agentCapabilities: {},
       currentSessionId: null,
       payload,
@@ -157,7 +146,6 @@ describe("Pi ACP model selection", () => {
         execution: { ...piPayload.execution, providerOptions: { pi: { thinkingLevel: "high" } } },
       };
       const setup = setupAcpSession({
-        sessionContext: driverBootPayload.execution.session.context,
         agentCapabilities: {},
         currentSessionId: null,
         payload,
@@ -207,7 +195,6 @@ describe("Pi ACP model selection", () => {
     test(`Given a Pi model configuration that is ${failure}, when setup runs, then readiness fails closed`, async () => {
       await expect(
         setupAcpSession({
-          sessionContext: driverBootPayload.execution.session.context,
           agentCapabilities: {},
           connection: connectionWith(async (method) => ({
             sessionId: "pi-session",
@@ -228,71 +215,30 @@ describe("Pi ACP model selection", () => {
 });
 
 describe("ACP session setup", () => {
-  test("creates the first native context for a strict Session without a prior reference", async () => {
+  test("rejects additional directories when the agent does not advertise support", async () => {
     const { connection, requests } = createRecordingConnection();
-    const result = await setupAcpSession(
-      setupInput({
-        agentCapabilities: {},
-        connection,
-        currentSessionId: null,
-        payload: strictStartInput,
-        replaySession: async (operation) => operation(),
-      }),
-    );
-    expect(result.mode).toBe("created");
-    expect(requests.map((request) => request.method)).toEqual([acpMethods.agent.session.new]);
-  });
 
-  test("does not replace required native state when the provider cannot restore", async () => {
-    const { connection, requests } = createRecordingConnection();
     await expect(
       setupAcpSession(
         setupInput({
-          agentCapabilities: {},
-          connection,
-          currentSessionId: EXISTING_SESSION_ID,
-          payload: {
-            ...driverStartInput,
-            execution: {
-              ...driverStartInput.execution,
-              session: { ...driverStartInput.execution.session, nativeResumeRequired: true },
-            },
+          agentCapabilities: {
+            loadSession: true,
+            sessionCapabilities: { close: {}, resume: {} },
           },
+          connection,
+          currentSessionId: null,
+          payload: withAdditionalDirectories(["/workspace/extra"]),
           replaySession: async (operation) => operation(),
         }),
       ),
-    ).rejects.toThrow("does not support restoring the required native session");
-    expect(requests).toEqual([]);
-  });
-
-  test("drops additional directories when the agent does not advertise support", async () => {
-    const { connection, requests } = createRecordingConnection();
-
-    const setup = await setupAcpSession(
-      setupInput({
-        agentCapabilities: {
-          loadSession: true,
-          sessionCapabilities: { close: {}, resume: {} },
-        },
-        connection,
-        currentSessionId: null,
-        payload: withAdditionalDirectories(["/workspace/extra"]),
-        replaySession: async (operation) => operation(),
-      }),
-    );
-
-    expect(setup.mode).toBe("created");
-    expect(setup.sessionId).toBe("acp-session-1");
-    expect(setup.droppedAdditionalDirectories).toEqual(["/workspace/extra"]);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.method).toBe(acpMethods.agent.session.new);
-    expect("additionalDirectories" in (requests[0]?.params ?? {})).toBe(false);
+    ).rejects.toThrow("does not advertise additionalDirectories support");
+    expect(requests).toHaveLength(0);
   });
 
   test("passes additional directories through when the agent advertises support", async () => {
     const { connection, requests } = createRecordingConnection();
 
-    const setup = await setupAcpSession(
+    await setupAcpSession(
       setupInput({
         agentCapabilities: {
           loadSession: true,
@@ -305,8 +251,11 @@ describe("ACP session setup", () => {
       }),
     );
 
-    expect(setup.droppedAdditionalDirectories).toEqual([]);
     expect(requests[0]?.params["additionalDirectories"]).toEqual(["/workspace/extra"]);
+    expect(requests[0]?.params["_meta"]).toEqual({
+      "mosoo.ai/origin": driverStartInput.execution.session.context.origin,
+      "mosoo.ai/sessionContext": driverStartInput.execution.session.context,
+    });
   });
 
   test("prefers resume without entering the load replay scope", async () => {
@@ -421,24 +370,21 @@ describe("ACP session setup", () => {
     });
   });
 
-  test("creates a new session when native restoration is unavailable", async () => {
+  test("rejects a native session when restoration is unavailable", async () => {
     const methods: string[] = [];
-    const result = await setupAcpSession(
-      setupInput({
-        agentCapabilities: {},
-        connection: connectionWith(async (method) => {
-          methods.push(method);
-          return { sessionId: "native-session-new" };
+    await expect(
+      setupAcpSession(
+        setupInput({
+          agentCapabilities: {},
+          connection: connectionWith(async (method) => {
+            methods.push(method);
+            return { sessionId: "native-session-new" };
+          }),
+          currentSessionId: EXISTING_SESSION_ID,
+          replaySession: async (operation) => operation(),
         }),
-        currentSessionId: EXISTING_SESSION_ID,
-        replaySession: async (operation) => operation(),
-      }),
-    );
-
-    expect(result).toMatchObject({
-      mode: "created",
-      sessionId: "native-session-new",
-    });
-    expect(methods).toEqual([acpMethods.agent.session.new]);
+      ),
+    ).rejects.toThrow("cannot restore the requested native session");
+    expect(methods).toEqual([]);
   });
 });

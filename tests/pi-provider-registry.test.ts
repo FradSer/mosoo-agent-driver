@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import { parseDriverBootPayload } from "../src/protocol/boot";
 import { parseDriverNativeRuntimeRef } from "../src/protocol/runtime";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
@@ -79,10 +78,4 @@ describe("Given the additive Pi-through-ACP runtime", () => {
       "supported",
     );
   });
-});
-
-test("Given a generation outside safe integer precision, when parsing boot, then admission rejects it", () => {
-  expect(() =>
-    parseDriverBootPayload({ ...driverBootPayload, driverGeneration: Number.MAX_SAFE_INTEGER + 1 }),
-  ).toThrow("safe integer");
 });

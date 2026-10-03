@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { permissionResolutionSchema, toolResolutionSchema } from "./command";
 import {
   audienceSchema,
   capabilitiesSchema,
@@ -15,6 +14,7 @@ import {
   revisionSchema,
   timestampSchema,
 } from "./common";
+import { permissionResolutionSchema, toolResolutionSchema } from "./command";
 import { contentBlockSchema } from "./content";
 
 const configOptionBase = {
@@ -79,6 +79,7 @@ export const tokenUsageSchema = z.strictObject({
   input: z.number().int().nonnegative().safe().optional(),
   output: z.number().int().nonnegative().safe().optional(),
   cachedInput: z.number().int().nonnegative().safe().optional(),
+  cachedWrite: z.number().int().nonnegative().safe().optional(),
   reasoning: z.number().int().nonnegative().safe().optional(),
   total: z.number().int().nonnegative().safe().optional(),
   cost: z
@@ -291,7 +292,7 @@ export const permissionOptionSchema = z.strictObject({
   label: z.string().min(1),
   description: z.string().optional(),
   effect: z.enum(["allow", "deny"]),
-  scope: z.enum(["once", "session"]),
+  scope: z.enum(["once", "session", "persistent"]),
   extensions: extensionsSchema.optional(),
 });
 

@@ -6,8 +6,8 @@ import type { DriverInstanceId } from "./id";
 import type { DriverRuntime, DriverRuntimeTransport } from "./runtime";
 
 export interface DriverStartInput {
+  readonly driverGeneration: number;
   readonly driverInstanceId: DriverInstanceId;
-  readonly driverGeneration?: number | undefined;
   readonly execution: DriverExecutionInput;
   readonly runtime: DriverRuntime;
   readonly runtimeTransport: DriverRuntimeTransport;
@@ -18,11 +18,11 @@ export function createDriverStartInputFromBootPayload(
   payload: DriverBootPayload,
 ): DriverStartInput {
   return {
-    driverInstanceId: payload.driverInstanceId,
     driverGeneration: payload.driverGeneration,
+    driverInstanceId: payload.driverInstanceId,
     execution: createDriverExecutionInputFromBootExecution(payload.execution),
     runtime: payload.runtime,
     runtimeTransport: payload.runtimeTransport,
-    sandboxId: payload.sandboxId,
+    sandboxId: payload.execution.session.context.sandboxId,
   };
 }

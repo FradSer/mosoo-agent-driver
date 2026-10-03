@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { createDriverId } from "../src/protocol/id";
-import type { RuntimeCommand } from "../src/runtime-command";
 import { parseRuntimeEventEnvelope } from "../src/runtime-events";
+import type { RuntimeCommand } from "../src/runtime-command";
 import type { CmaSessionEventRecord } from "../src/stores/cma-store";
 import { CMA_MAX_EVENT_BYTES, encodeCmaSseRecord } from "../src/stores/cma-store";
 import { createCmaMemoryStore } from "../src/stores/memory";
@@ -68,7 +68,7 @@ function messageEvent(
     occurredAt: "2026-01-01T00:00:01.000Z",
     origin: "driver",
     payload,
-    schemaVersion: "2026-05-26",
+    schemaVersion: "2026-08-29",
     sessionId,
     visibility: "participant",
   });

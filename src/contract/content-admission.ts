@@ -1,5 +1,5 @@
-import type { ContentBlock } from "./content";
 import type { AuthorityOperation, ProposedMutation } from "./mutation";
+import type { ContentBlock } from "./content";
 import type { Interaction, Item, Run } from "./state";
 
 function itemContent(item: Item): readonly ContentBlock[] {

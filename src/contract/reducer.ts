@@ -1,4 +1,9 @@
-import { assertProtocolAdmission, compareTimestamps } from "./common";
+import type { CommittedMutation } from "./mutation";
+import { committedMutationSchema } from "./mutation";
+import { PROTOCOL_VERSION, assertProtocolAdmission, compareTimestamps } from "./common";
+import type { SyncPayload } from "./sync";
+import { syncPayloadSchema } from "./sync";
+import type { SessionSnapshot } from "./state";
 import { authorityContent } from "./content-admission";
 import {
   assertNotBefore,
@@ -8,9 +13,6 @@ import {
   isTerminalRun,
   itemKey,
 } from "./invariant";
-import type { CommittedMutation } from "./mutation";
-import { committedMutationSchema } from "./mutation";
-import type { SessionSnapshot } from "./state";
 import {
   assertSessionTransition,
   putInteraction,
@@ -19,8 +21,6 @@ import {
   validateSessionSnapshot,
   validateState,
 } from "./state-validation";
-import type { SyncPayload } from "./sync";
-import { syncPayloadSchema } from "./sync";
 
 export { authorityContent } from "./content-admission";
 export { normalizeExecutorMutation, validateExecutorMutation } from "./executor-mutation";
@@ -169,7 +169,7 @@ function applyMutation(current: SessionSnapshot, mutation: CommittedMutation): S
   }
 
   const next: SessionSnapshot = {
-    protocolVersion: 2,
+    protocolVersion: PROTOCOL_VERSION,
     revision: mutation.revision,
     capturedAt: mutation.committedAt,
     session,
