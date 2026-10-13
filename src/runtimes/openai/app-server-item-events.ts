@@ -2,6 +2,12 @@ import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import type { DriverEventInput } from "../../protocol/events";
 import { chunkJsonText } from "../provider-json";
 import { createRuntimeSourceEventId, toRuntimePublicId } from "../runtime-public-id";
+import {
+  OpenAiAgentTaskState,
+  openAiAgentTasksClosedEvent,
+  toOpenAiAgentTaskId,
+  type OpenAiSubAgentActivity,
+} from "./app-server-agent-task-events";
 import { toOpenAiPlanStatus } from "./app-server-event-mapping";
 import {
   assertOpenAiDurableEventFits,
@@ -17,12 +23,6 @@ import type {
 } from "./app-server-event-state";
 import { isRecord, readArray, readNonEmptyString, readRecord, readString } from "./app-server-json";
 import type { JsonObject } from "./app-server-json";
-import {
-  OpenAiAgentTaskState,
-  openAiAgentTasksClosedEvent,
-  toOpenAiAgentTaskId,
-  type OpenAiSubAgentActivity,
-} from "./app-server-agent-task-events";
 import {
   toOpenAiCollaborationOutput,
   toOpenAiFileChangeEvents,
@@ -55,6 +55,10 @@ function toOpenAiMessageSnapshotEvents(input: {
   readonly sourcePrefix: string;
   readonly text: string;
 }): DriverEventInput[] {
+  // Native tool turns can close an assistant item without text. Its lifecycle
+  // still closes, but there is no text snapshot to publish.
+  if (input.text.length === 0) return [];
+
   const createAddedEvent = (content: string): DriverEventInput => ({
     delivery: "lossless",
     kind: "message.added",
