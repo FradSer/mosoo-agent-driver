@@ -348,16 +348,14 @@ const runtimeCases: LiveRuntimeCase[] = [
     suite: "anthropic",
     transport: "claude-agent-sdk",
   } satisfies LiveRuntimeCase,
-  ...config.openCodeModels.map(
-    (model): LiveRuntimeCase => ({
-      model,
-      nativeResumeKind: "acp_session_id",
-      provider: "openrouter",
-      runtime: "acp-fallback",
-      suite: "opencode",
-      transport: "acp-fallback",
-    }),
-  ),
+  ...config.openCodeModels.map((model): LiveRuntimeCase => ({
+    model,
+    nativeResumeKind: "acp_session_id",
+    provider: "openrouter",
+    runtime: "acp-fallback",
+    suite: "opencode",
+    transport: "acp-fallback",
+  })),
 ].filter((runtimeCase) => config.suite === "all" || config.suite === runtimeCase.suite);
 const representativeOpenCodeModel =
   config.openCodeModels.find((model) => model.includes("/deepseek/")) ?? config.openCodeModels[0]!;
