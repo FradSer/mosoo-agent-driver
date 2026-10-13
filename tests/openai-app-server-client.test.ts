@@ -7,16 +7,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
+import { PermissionEventDeliveryError } from "../src/core/driver-permission-broker";
 import type { AgentDriverPermissionPort } from "../src/host-ports";
 import { createDisabledLogger } from "../src/observability";
 import type { DriverExecutionEnvironment } from "../src/protocol/boot";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
-import { PermissionEventDeliveryError } from "../src/core/driver-permission-broker";
 import * as childProcessHelpers from "../src/runtimes/child-process";
 import { OpenAiAppServerClient, limitNdjsonLines } from "../src/runtimes/openai/app-server-client";
-import * as openAiAuthState from "../src/runtimes/openai/auth-state";
 import type { ServerNotificationMethod } from "../src/runtimes/openai/app-server-protocol";
+import * as openAiAuthState from "../src/runtimes/openai/auth-state";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { driverBootPayload } from "./driver-boot-payload-fixture";
 
@@ -2017,10 +2017,11 @@ setInterval(() => {}, 1000);
     try {
       await harness.client.start();
       await firstNotification.promise;
+      const burstFlushedFile = Bun.file(join(harness.directory, "burst-flushed"));
       expect(handled).toBe(1);
       expect(harness.protocolErrors).toEqual([]);
       if (!rejected) {
-        expect(await Bun.file(join(harness.directory, "burst-flushed")).exists()).toBe(false);
+        expect(await burstFlushedFile.exists()).toBe(false);
       }
 
       notificationGate.resolve();
@@ -2029,7 +2030,12 @@ setInterval(() => {}, 1000);
         await expect(drain).rejects.toThrow("message queue limit exceeded");
       } else {
         await drain;
-        expect(await Bun.file(join(harness.directory, "burst-flushed")).exists()).toBe(true);
+        let burstFlushed = await burstFlushedFile.exists();
+        for (let attempt = 0; attempt < 100 && !burstFlushed; attempt += 1) {
+          await Bun.sleep(5);
+          burstFlushed = await burstFlushedFile.exists();
+        }
+        expect(burstFlushed).toBe(true);
       }
       expect(handled).toBe(Math.min(messageCount, 1_024));
       if (rejected) {

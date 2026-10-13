@@ -3,25 +3,25 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { AgentDriverBackend } from "../src/core/agent-driver-backend";
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
+import { AgentDriverKernelCore } from "../src/core/agent-driver-kernel";
+import { ACTIVE_TURN_CANCEL_GRACE_MS } from "../src/core/driver-command-dispatcher";
 import type { AgentDriverPermissionPort } from "../src/host-ports";
+import { toDriverEventEnvelopes } from "../src/infrastructure/runtime/driver-instance-socket";
 import { createDisabledLogger } from "../src/observability";
 import type { DriverPermissionPolicy } from "../src/protocol/boot";
 import type { DriverEventInput } from "../src/protocol/events";
 import { createDriverId, isDriverId, type RunId } from "../src/protocol/id";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
-import type { AgentDriverBackend } from "../src/core/agent-driver-backend";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
-import { AgentDriverKernelCore } from "../src/core/agent-driver-kernel";
-import { ACTIVE_TURN_CANCEL_GRACE_MS } from "../src/core/driver-command-dispatcher";
-import { toDriverEventEnvelopes } from "../src/infrastructure/runtime/driver-instance-socket";
+import { DriverEventPublisher } from "../src/runtimes/driver-event-publisher";
+import { pinNativeCheckpointRoot } from "../src/runtimes/native-checkpoint";
 import { OpenAiAppServerClient } from "../src/runtimes/openai/app-server-client";
 import { OpenAiAppServerDriverBackend } from "../src/runtimes/openai/app-server-driver-backend";
 import { createOpenAiNativeCheckpoint } from "../src/runtimes/openai/native-checkpoint";
-import { DriverEventPublisher } from "../src/runtimes/driver-event-publisher";
-import { pinNativeCheckpointRoot } from "../src/runtimes/native-checkpoint";
 import { createCmaMemoryStore } from "../src/stores/memory";
-import { DRIVER_TEST_IDS, driverBootPayload } from "./driver-boot-payload-fixture";
 import { settlePromiseWithTimeout } from "../src/utils/async";
+import { DRIVER_TEST_IDS, driverBootPayload } from "./driver-boot-payload-fixture";
 
 const originalExecutable = process.env["MOSOO_OPENAI_RUNTIME_EXECUTABLE"];
 const temporaryDirectories: string[] = [];
@@ -52,9 +52,11 @@ interface CancellationHarnessOptions {
   readonly holdCancellationRequest?: boolean;
   readonly holdRunCancellation?: boolean;
   readonly holdMessageStart?: boolean;
+  readonly holdSecondTurnCompletion?: boolean;
   readonly holdTurnStartAfterItems?: boolean;
   readonly holdToolCompletion?: boolean;
   readonly nativeResume?: boolean;
+  readonly requireCheckpointRestoreOnResume?: boolean;
   readonly restartResumeError?: string;
   readonly threadId?: string;
   readonly turnId?: string;
@@ -286,6 +288,9 @@ const persistCompletedTurn = (turnId) => {
     type: "event_msg",
     payload: { type: "task_complete", turn_id: turnId, error: null },
   }) + "\\n");
+  if (${JSON.stringify(cancellationOptions.requireCheckpointRestoreOnResume ?? false)}) {
+    writeFileSync(join(process.env.CODEX_SQLITE_HOME, "state_1.sqlite"), "stale projection");
+  }
 };
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -321,11 +326,15 @@ process.stdin.on("data", (chunk) => {
       ((launchNumber > 1 || turnNumber > 1) &&
         !${JSON.stringify(cancellationOptions.emitToolCompletionOnTurnStart ?? false)});
     const holdTurnStart =
+      request.method === "turn/start" &&
       (${JSON.stringify(holdFirstTurnStartResponse)} ||
         ${JSON.stringify(cancellationOptions.holdTurnStartAfterItems ?? false)}) &&
       launchNumber === 1 &&
-      request.method === "turn/start" &&
       turnNumber === 1;
+    const holdSecondTurnCompletion =
+      ${JSON.stringify(cancellationOptions.holdSecondTurnCompletion ?? false)} &&
+      launchNumber === 1 &&
+      turnNumber === 2;
     const response =
       request.method === "initialized"
         ? null
@@ -337,9 +346,19 @@ process.stdin.on("data", (chunk) => {
           ${JSON.stringify(cancellationOptions.failInitialThreadStart ?? false)}
         ? { id: request.id, error: { code: -32600, message: "initial thread start failed" } }
       : request.method === "thread/resume"
-      ? resumeError === null
+      ? resumeError === null &&
+        !(${JSON.stringify(cancellationOptions.requireCheckpointRestoreOnResume ?? false)} &&
+          existsSync(join(process.env.CODEX_SQLITE_HOME, "state_1.sqlite")))
         ? { id: request.id, result: threadStartResult }
-        : { id: request.id, error: { code: -32600, message: resumeError } }
+        : {
+            id: request.id,
+            error: {
+              code: -32600,
+              message:
+                resumeError ??
+                "no rollout found for thread id " + ${JSON.stringify(cancellationOptions.threadId ?? "fresh-thread")},
+            },
+          }
       : request.method === "thread/start"
         ? { id: request.id, result: threadStartResult }
         : request.method === "turn/start" && turnStartErrorMessage !== null
@@ -429,9 +448,11 @@ process.stdin.on("data", (chunk) => {
           () =>
             sendToolLifecycle(
               turnId,
-              launchNumber > 1 ||
-                turnNumber > 1 ||
-                !${JSON.stringify(cancellationOptions.holdTurnStartAfterItems ?? false)},
+              !holdSecondTurnCompletion &&
+                (launchNumber > 1 ||
+                  turnNumber > 1 ||
+                  !${JSON.stringify(cancellationOptions.holdTurnStartAfterItems ?? false)}),
+              !holdSecondTurnCompletion,
             ),
           5,
         );
@@ -1144,12 +1165,7 @@ describe("OpenAI app-server startup", () => {
         false,
         "full_access",
         true,
-        operation === "cancel"
-          ? {
-              restartResumeError:
-                "failed to read thread: thread-store internal error: failed to read thread /tmp/rollout.jsonl: rollout at /tmp/rollout.jsonl is empty",
-            }
-          : {},
+        {},
       );
       const reason = `test.${operation}`;
 
@@ -1213,10 +1229,7 @@ describe("OpenAI app-server startup", () => {
               ),
               { label: "turn after registration-window cancellation", timeoutMs: 1_000 },
             ),
-          ).resolves.toMatchObject({
-            status: "failed",
-            error: { message: expect.stringContaining("rollout at /tmp/rollout.jsonl is empty") },
-          });
+          ).resolves.toMatchObject({ status: "completed" });
           expect(
             harness.events
               .filter(
@@ -1225,12 +1238,13 @@ describe("OpenAI app-server startup", () => {
                   ["run.cancelled", "run.completed", "run.failed"].includes(event.kind),
               )
               .map((event) => event.kind),
-          ).toEqual(["run.failed"]);
+          ).toEqual(["run.completed"]);
           const requests = (await readFile(harness.requestLog, "utf8"))
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line) as { method: string });
-          expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+          expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
+          expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
           expect(requests.some((request) => request.method === "thread/inject_items")).toBe(false);
         }
       } finally {
@@ -1587,11 +1601,217 @@ describe("OpenAI app-server startup", () => {
         requests
           .filter((request) => request.method === "thread/resume")
           .map((request) => request.params?.threadId),
-      ).toEqual(["fresh-thread"]);
+      ).toEqual([]);
+      expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
       expect(requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
     } finally {
       await harness.releaseTurnStartResponse();
       await kernel.stop("test complete").catch(() => {});
+    }
+  });
+
+  test("dispatcher cancellation resumes a thread with persisted native history", async () => {
+    const harness = await createCancellationHarness({
+      holdTurnStartAfterItems: true,
+      nativeResume: true,
+    });
+    const kernel = new AgentDriverKernelCore({
+      backendFactory: (payload) => new OpenAiAppServerDriverBackend(payload),
+      hostPorts: {
+        skill: {
+          materialize: async () => [],
+        },
+      },
+      logger: harness.logger,
+    });
+
+    try {
+      await kernel.start(harness.payload);
+      const firstInput = kernel.dispatch({
+        commandId: "pending-turn-start-with-history",
+        input: { text: "first" },
+        kind: "input.start",
+        requestId: "pending-turn-with-history-request",
+        runId: DRIVER_TEST_IDS.runId,
+      });
+      void firstInput.catch(() => {});
+      await expect(
+        settlePromiseWithTimeout(
+          (async () => {
+            while (!(await Bun.file(harness.turnStartHeldMarker).exists())) {
+              await Bun.sleep(1);
+            }
+          })(),
+          { label: "held turn start with native history", timeoutMs: 1_000 },
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+
+      await expect(
+        settlePromiseWithTimeout(Promise.all([firstInput, kernel.cancel("test.cancel")]), {
+          label: "native-history turn/start cancellation",
+          timeoutMs: ACTIVE_TURN_CANCEL_GRACE_MS,
+        }),
+      ).resolves.toMatchObject({ status: "completed" });
+
+      await expect(
+        settlePromiseWithTimeout(
+          kernel.dispatch({
+            commandId: "input-after-native-history-cancellation",
+            input: { text: "second" },
+            kind: "input.start",
+            requestId: "request-after-native-history-cancellation",
+            runId: DRIVER_TEST_IDS.secondRunId,
+          }),
+          { label: "input after native-history cancellation", timeoutMs: 1_000 },
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+
+      const requests = (await readFile(harness.requestLog, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              params?: { threadId?: string };
+            },
+        );
+      expect(
+        requests
+          .filter((request) => request.method === "thread/resume")
+          .map((request) => request.params?.threadId),
+      ).toEqual(["fresh-thread", "fresh-thread"]);
+      expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(0);
+    } finally {
+      await harness.releaseTurnStartResponse();
+      await kernel.stop("test complete").catch(() => {});
+    }
+  });
+
+  test("cancellation after turn start ACK starts a fresh thread without native history", async () => {
+    const harness = await createCancellationHarness({});
+
+    try {
+      await harness.backend.start(harness.context, new AbortController().signal);
+      const firstInput = harness.backend.handleInput(
+        harness.context,
+        { text: "first" },
+        DRIVER_TEST_IDS.runId,
+      );
+      void firstInput.catch(() => {});
+      await expect(
+        settlePromiseWithTimeout(
+          (async () => {
+            while (!harness.events.some((event) => event.kind === "run.started")) {
+              await Bun.sleep(1);
+            }
+          })(),
+          { label: "OpenAI turn after start ACK", timeoutMs: 250 },
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+
+      await expect(
+        harness.backend.cancelActiveTurn(harness.context, "test.cancel"),
+      ).resolves.toBeUndefined();
+      await expect(firstInput).rejects.toThrow("test.cancel");
+      await expect(
+        harness.backend.handleInput(
+          harness.context,
+          { text: "second" },
+          DRIVER_TEST_IDS.secondRunId,
+        ),
+      ).resolves.toBeUndefined();
+
+      const requests = (await readFile(harness.requestLog, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              params?: { threadId?: string };
+            },
+        );
+      expect(
+        requests
+          .filter((request) => request.method === "thread/resume")
+          .map((request) => request.params?.threadId),
+      ).toEqual([]);
+      expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
+    } finally {
+      await harness.backend.stop(harness.context, "test complete", new AbortController().signal);
+    }
+  });
+
+  test("cancellation after a completed turn resumes the established native thread", async () => {
+    const harness = await createCancellationHarness({
+      emitToolCompletionOnTurnStart: true,
+      holdSecondTurnCompletion: true,
+      requireCheckpointRestoreOnResume: true,
+    });
+
+    try {
+      await harness.backend.start(harness.context, new AbortController().signal);
+      await harness.backend.handleInput(harness.context, { text: "first" }, DRIVER_TEST_IDS.runId);
+      expect(
+        harness.events.some(
+          (event) => event.runId === DRIVER_TEST_IDS.runId && event.kind === "run.completed",
+        ),
+      ).toBe(true);
+
+      const cancelledInput = harness.backend.handleInput(
+        harness.context,
+        { text: "cancelled" },
+        DRIVER_TEST_IDS.secondRunId,
+      );
+      void cancelledInput.catch(() => {});
+      await expect(
+        settlePromiseWithTimeout(
+          (async () => {
+            while (
+              !harness.events.some(
+                (event) =>
+                  event.runId === DRIVER_TEST_IDS.secondRunId && event.kind === "run.started",
+              )
+            ) {
+              await Bun.sleep(1);
+            }
+          })(),
+          { label: "cancelled turn after completed native history", timeoutMs: 1_000 },
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+      await expect(
+        harness.backend.cancelActiveTurn(harness.context, "test.cancel"),
+      ).resolves.toBeUndefined();
+      await expect(cancelledInput).rejects.toThrow("test.cancel");
+
+      await expect(
+        harness.backend.handleInput(harness.context, { text: "third" }, DRIVER_TEST_IDS.thirdRunId),
+      ).resolves.toBeUndefined();
+
+      const requests = (await readFile(harness.requestLog, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              params?: { threadId?: string };
+            },
+        );
+      expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+      expect(
+        requests
+          .filter((request) => request.method === "thread/resume")
+          .map((request) => request.params?.threadId),
+      ).toEqual(["fresh-thread"]);
+      expect(
+        harness.events.some(
+          (event) => event.runId === DRIVER_TEST_IDS.thirdRunId && event.kind === "run.completed",
+        ),
+      ).toBe(true);
+    } finally {
+      await harness.backend.stop(harness.context, "test complete", new AbortController().signal);
     }
   });
 
@@ -2288,6 +2508,7 @@ describe("OpenAI app-server startup", () => {
 
   test("retains a failed restart client until shutdown retries its cleanup", async () => {
     const harness = await createCancellationHarness({
+      nativeResume: true,
       restartResumeError: "restart resume failed",
     });
     const nativeKill = process.kill;

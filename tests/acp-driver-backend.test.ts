@@ -1,5 +1,4 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { ClientContext } from "@agentclientprotocol/sdk";
 import { readFileSync } from "node:fs";
 import {
   mkdir,
@@ -14,27 +13,29 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ClientContext } from "@agentclientprotocol/sdk";
+
+import { createAgentDriverContext } from "../src/core/agent-driver-backend";
 import {
   DriverPermissionBroker,
   PermissionEventDeliveryError,
 } from "../src/core/driver-permission-broker";
-import { DriverRuntimeStateMachine } from "../src/core/driver-runtime-state";
 import type { DriverRuntimeEventPort } from "../src/core/driver-runtime-io";
+import { DriverRuntimeStateMachine } from "../src/core/driver-runtime-state";
 import { DriverTerminalStateMachine } from "../src/core/driver-terminal-state";
-import { createDisabledLogger } from "../src/observability";
 import type { AgentDriverFilePort, AgentDriverPermissionPort } from "../src/host-ports";
+import { createDisabledLogger } from "../src/observability";
 import type { DriverBootPayload } from "../src/protocol/boot";
 import type { DriverEventInput } from "../src/protocol/events";
 import { createDriverId } from "../src/protocol/id";
 import type { EventId, RunId } from "../src/protocol/id";
-import { toRuntimeEventInput } from "../src/runtime-events";
 import { createDriverStartInputFromBootPayload } from "../src/protocol/start";
-import { AcpDriverBackend } from "../src/runtimes/acp/acp-driver-backend";
+import { toRuntimeEventInput } from "../src/runtime-events";
 import * as acpAgentProcess from "../src/runtimes/acp/acp-agent-process";
-import * as openCodeCheckpoint from "../src/runtimes/acp/opencode-checkpoint";
 import { AcpClientRequestHandler } from "../src/runtimes/acp/acp-client-request-handler";
+import { AcpDriverBackend } from "../src/runtimes/acp/acp-driver-backend";
 import { AcpTurnController } from "../src/runtimes/acp/acp-turn-controller";
-import { createAgentDriverContext } from "../src/core/agent-driver-backend";
+import * as openCodeCheckpoint from "../src/runtimes/acp/opencode-checkpoint";
 import { settlePromiseWithTimeout } from "../src/utils/async";
 import { waitForAcpTestCondition } from "./acp-test-helpers";
 import { driverBootPayload, DRIVER_TEST_IDS } from "./driver-boot-payload-fixture";
@@ -343,6 +344,14 @@ const handle = (message) => {
       }
       if (message.params.prompt[0]?.text === "hang") {
         pendingPromptId = message.id;
+        if (latePidPath && process.env.TEST_SPAWN_EARLY_CHILD === "1") {
+          const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            detached: true,
+            stdio: "ignore",
+          });
+          appendFileSync(latePidPath, String(child.pid) + "\n");
+          child.unref();
+        }
         send({
           jsonrpc: "2.0",
           method: "session/update",
@@ -656,6 +665,7 @@ async function createHarness(
     onEvents?(events: readonly DriverEventInput[]): void;
     readonly permission?: AgentDriverPermissionPort["request"];
     readonly spawnLateChild?: boolean;
+    readonly spawnEarlyChild?: boolean;
     readonly updateBeforeSessionResponse?: boolean;
     readonly writeOnClose?: boolean;
   } = {},
@@ -693,6 +703,7 @@ async function createHarness(
           TEST_HANG_CLOSE: options.hangClose ? "1" : "0",
           TEST_METADATA_ON_RESUME: options.metadataOnResume ? "1" : "0",
           TEST_SPAWN_LATE_CHILD: options.spawnLateChild ? "1" : "0",
+          TEST_SPAWN_EARLY_CHILD: options.spawnEarlyChild ? "1" : "0",
           TEST_UPDATE_BEFORE_SESSION_RESPONSE: options.updateBeforeSessionResponse ? "1" : "0",
           ...(options.authenticate ? { MOSOO_ACP_AUTH_METHOD_ID: "test-auth" } : {}),
         },
@@ -751,6 +762,7 @@ async function createHarness(
           toRuntimeEventInput(
             {
               createId: () => createDriverId() as EventId,
+              ...(eventRunId === null ? { draftRunIdPolicy: "ignore" as const } : {}),
               driverInstanceId: DRIVER_TEST_IDS.driverInstanceId,
               occurredAt: "2026-10-10T00:00:00.000Z",
               ...(eventRunId === null ? {} : { runId: eventRunId }),
@@ -1742,14 +1754,12 @@ describe("ACP driver backend lifecycle", () => {
         blockResume: true,
         spawnLateChild: true,
       });
+      const firstRunId = createDriverId() as RunId;
+      const secondRunId = createDriverId() as RunId;
 
       try {
         const eventOffset = harness.events.length;
-        const input = harness.backend.handleInput(
-          harness.context,
-          { text: "hang" },
-          DRIVER_TEST_IDS.runId as RunId,
-        );
+        const input = harness.backend.handleInput(harness.context, { text: "hang" }, firstRunId);
         void input.catch(() => {});
         await waitForAcpTestCondition(
           async () => (await harness.methods()).includes("session/prompt"),
@@ -1762,6 +1772,10 @@ describe("ACP driver backend lifecycle", () => {
         await waitForAcpTestCondition(
           async () => (await harness.methods()).includes("session/cancel"),
           "ACP session/cancel request",
+        );
+        await waitForAcpTestCondition(
+          async () => (await readFile(harness.latePidPath, "utf8").catch(() => "")).trim() !== "",
+          "ACP late child PID publication",
         );
         gate.release();
         await expect(cancellation).resolves.toBeUndefined();
@@ -1803,12 +1817,14 @@ describe("ACP driver backend lifecycle", () => {
         expect(harness.lifecycleFailures).toEqual([]);
 
         await expect(
-          harness.backend.handleInput(
-            harness.context,
-            { text: "after recycle" },
-            DRIVER_TEST_IDS.secondRunId as RunId,
-          ),
+          harness.backend.handleInput(harness.context, { text: "after recycle" }, secondRunId),
         ).resolves.toBeUndefined();
+        const latestAgentPid = Number.parseInt(
+          (await readFile(harness.agentPidPath, "utf8")).trim().split("\n").at(-1) ?? "0",
+          10,
+        );
+        await Bun.sleep(4_600);
+        expect(isRunning(latestAgentPid)).toBe(true);
       } finally {
         await writeFile(harness.resumeGatePath, "cleanup").catch(() => {});
         await harness.destroy();
@@ -1892,6 +1908,7 @@ describe("ACP driver backend lifecycle", () => {
       nativeSessionId: () => "native-session-1",
       onUpdateFailure: () => {},
       push: async () => {},
+      pushSession: async () => {},
       turnEvents: turn.events,
     });
     const connection = {
@@ -1944,6 +1961,7 @@ describe("ACP driver backend lifecycle", () => {
       nativeSessionId: () => "native-session-1",
       onUpdateFailure: () => {},
       push: async () => {},
+      pushSession: async () => {},
       turnEvents: turn.events,
     });
     const connection = {
@@ -2002,6 +2020,7 @@ describe("ACP driver backend lifecycle", () => {
       nativeSessionId: () => "native-session-1",
       onUpdateFailure: () => {},
       push: async () => {},
+      pushSession: async () => {},
       turnEvents: turn.events,
     });
     const connection = {
@@ -2070,6 +2089,7 @@ describe("ACP driver backend lifecycle", () => {
       nativeSessionId: () => "native-session-1",
       onUpdateFailure: () => {},
       push: async () => {},
+      pushSession: async () => {},
       turnEvents: turn.events,
     });
     const connection = {
@@ -2150,6 +2170,7 @@ describe("ACP driver backend lifecycle", () => {
       nativeSessionId: () => "native-session-1",
       onUpdateFailure: () => {},
       push: async () => {},
+      pushSession: async () => {},
       turnEvents: turn.events,
     });
     const connection = {
@@ -2879,70 +2900,93 @@ describe("ACP driver backend lifecycle", () => {
     }
   }, 7_000);
 
-  test("stops an active session without resuming its cancelled provider", async () => {
-    const harness = await createHarness();
-    const runtimeState = new DriverRuntimeStateMachine("ready");
-    const socket = new FakeDriverRuntimeIo([
-      {
-        commandId: "acp-stop-input",
-        input: { text: "hang" },
-        kind: "input.start",
-        requestId: "acp-stop-request",
-        runId: DRIVER_TEST_IDS.runId,
-      },
-      {
-        commandId: "acp-stop-session",
-        kind: "session.stop",
-        reason: "test.stop",
-      },
-    ]);
-    const nextCommand = socket.nextCommand.bind(socket);
-    socket.nextCommand = async (signal) => {
-      const command = await nextCommand(signal);
-      if (command?.kind === "session.stop") {
-        await waitForAcpTestCondition(
-          async () => (await harness.methods()).includes("session/prompt"),
-          "ACP session/prompt request",
-        );
+  test.skipIf(process.platform !== "linux")(
+    "stops an active session without resuming its cancelled provider",
+    async () => {
+      let detachedChildLiveAtCancellation: boolean | null = null;
+      const harness = await createHarness({ spawnEarlyChild: true });
+      const runtimeState = new DriverRuntimeStateMachine("ready");
+      const socket = new FakeDriverRuntimeIo([
+        {
+          commandId: "acp-stop-input",
+          input: { text: "hang" },
+          kind: "input.start",
+          requestId: "acp-stop-request",
+          runId: DRIVER_TEST_IDS.runId,
+        },
+        {
+          commandId: "acp-stop-session",
+          kind: "session.stop",
+          reason: "test.stop",
+        },
+      ]);
+      const nextCommand = socket.nextCommand.bind(socket);
+      socket.nextCommand = async (signal) => {
+        const command = await nextCommand(signal);
+        if (command?.kind === "session.stop") {
+          await waitForAcpTestCondition(
+            async () => (await harness.methods()).includes("session/prompt"),
+            "ACP session/prompt request",
+          );
+          await waitForAcpTestCondition(
+            async () => (await readFile(harness.latePidPath, "utf8").catch(() => "")).trim() !== "",
+            "ACP early child PID publication before session stop",
+          );
+          const earlyPid = Number.parseInt(readFileSync(harness.latePidPath, "utf8").trim(), 10);
+          expect(isRunning(earlyPid)).toBe(true);
+        }
+        return command;
+      };
+      const pushEvents = socket.pushEvents.bind(socket);
+      socket.pushEvents = async (input) => {
+        if (input.events.some(({ kind }) => kind === "run.cancelled")) {
+          await waitForAcpTestCondition(
+            async () => (await readFile(harness.latePidPath, "utf8").catch(() => "")).trim() !== "",
+            "ACP late child PID publication before cancellation terminal",
+          );
+          const latePid = Number.parseInt(readFileSync(harness.latePidPath, "utf8").trim(), 10);
+          detachedChildLiveAtCancellation = isRunning(latePid);
+        }
+        return pushEvents(input);
+      };
+      const { dispatcher, logger } = createDispatcher({
+        backend: harness.backend,
+        isShuttingDown: () => runtimeState.isShuttingDown(),
+        runtimeState,
+        shutdown: async (_runtimeIo, reason) =>
+          harness.backend.stop(harness.context, reason, new AbortController().signal),
+      });
+
+      try {
+        await dispatcher.run(socket, logger);
+
+        const events = socket.pushedEvents.flatMap(({ events }) => events);
+        expect(
+          events
+            .filter(
+              ({ kind }) =>
+                kind === "run.cancelled" || kind === "run.completed" || kind === "run.failed",
+            )
+            .map(({ kind }) => kind),
+        ).toEqual(["run.cancelled"]);
+        expect(events.filter(({ kind }) => kind === "run.cancel.requested")).toHaveLength(1);
+        expect(await harness.methods()).not.toContain("session/resume");
+        expect(detachedChildLiveAtCancellation).toBe(false);
+        expect(socket.updates).toContainEqual({
+          commandId: "acp-stop-input",
+          status: "cancelled",
+        });
+        expect(socket.updates).toContainEqual({
+          commandId: "acp-stop-session",
+          status: "completed",
+        });
+        expect(socket.completedRunReasons).toEqual(["completed"]);
+        expect(runtimeState.status()).toBe("stopped");
+      } finally {
+        await harness.destroy();
       }
-      return command;
-    };
-    const { dispatcher, logger } = createDispatcher({
-      backend: harness.backend,
-      isShuttingDown: () => runtimeState.isShuttingDown(),
-      runtimeState,
-      shutdown: async (_runtimeIo, reason) =>
-        harness.backend.stop(harness.context, reason, new AbortController().signal),
-    });
-
-    try {
-      await dispatcher.run(socket, logger);
-
-      const events = socket.pushedEvents.flatMap(({ events }) => events);
-      expect(
-        events
-          .filter(
-            ({ kind }) =>
-              kind === "run.cancelled" || kind === "run.completed" || kind === "run.failed",
-          )
-          .map(({ kind }) => kind),
-      ).toEqual(["run.cancelled"]);
-      expect(events.filter(({ kind }) => kind === "run.cancel.requested")).toHaveLength(1);
-      expect(await harness.methods()).not.toContain("session/resume");
-      expect(socket.updates).toContainEqual({
-        commandId: "acp-stop-input",
-        status: "cancelled",
-      });
-      expect(socket.updates).toContainEqual({
-        commandId: "acp-stop-session",
-        status: "completed",
-      });
-      expect(socket.completedRunReasons).toEqual(["completed"]);
-      expect(runtimeState.status()).toBe("stopped");
-    } finally {
-      await harness.destroy();
-    }
-  });
+    },
+  );
 
   test("drains burst updates sent immediately before the prompt response", async () => {
     const harness = await createHarness();

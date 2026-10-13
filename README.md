@@ -104,6 +104,7 @@ A native reference alone cannot authorize recovery.
 Run-scoped commands and terminal RPCs identify their Run explicitly.
 
 Each successful Run exports an immutable, verified native bundle under `.state/native-checkpoints/<runId>` and includes its descriptor in `run.completed`.
+OpenAI cancellation before the first successful native checkpoint starts a fresh thread for the next input; cancellation after a successful checkpoint resumes the established thread.
 In mosoo, the host backs up that bundle before atomically committing the checkpoint descriptor and canonical completion receipt.
 The next Run waits for terminal acknowledgement, backend settlement, required cleanup, and input-command acknowledgement.
 A cleanup failure blocks handoff while preserving the committed outcome.

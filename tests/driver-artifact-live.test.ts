@@ -9,6 +9,21 @@ import { isAbsolute, join, resolve } from "node:path";
 import { DRIVER_PROTOCOL_VERSION } from "../src/protocol/boot";
 import { parseRunId } from "../src/protocol/id";
 import { parseNativeCheckpoint, type NativeCheckpoint } from "../src/protocol/native-checkpoint";
+import { createOpenCodeConfig } from "./driver-artifact-live-config";
+import {
+  CANONICAL_MESSAGE_TERMINAL_KINDS,
+  CANONICAL_THOUGHT_TERMINAL_KINDS,
+  isCanonicalMessageTerminalKind,
+  isCanonicalThoughtTerminalKind,
+  type CanonicalMessageTerminalKind,
+  type CanonicalThoughtTerminalKind,
+} from "./driver-artifact-live-message-terminal";
+import { isOpenAiRuntimeNotice } from "./driver-artifact-live-runtime-notice";
+import {
+  inspectToolCallUpdateLifecycle,
+  isCanonicalToolCallStatus,
+} from "./driver-artifact-live-tool-status";
+import { ACP_FALLBACK_USAGE_METADATA } from "./driver-artifact-live-usage";
 import {
   DriverArtifactTestController,
   expectedDriverCapabilities,
@@ -135,10 +150,7 @@ interface StartBoundaryObservation {
 }
 
 const EXPECTED_USAGE_METADATA = {
-  "acp-fallback": {
-    sources: ["prompt_response", "session_update"],
-    usageContract: "anthropic_bucketed",
-  },
+  "acp-fallback": ACP_FALLBACK_USAGE_METADATA,
   "claude-agent-sdk": {
     sources: ["session_update"],
     usageContract: "anthropic_bucketed",
@@ -336,14 +348,16 @@ const runtimeCases: LiveRuntimeCase[] = [
     suite: "anthropic",
     transport: "claude-agent-sdk",
   } satisfies LiveRuntimeCase,
-  ...config.openCodeModels.map((model): LiveRuntimeCase => ({
-    model,
-    nativeResumeKind: "acp_session_id",
-    provider: "openrouter",
-    runtime: "acp-fallback",
-    suite: "opencode",
-    transport: "acp-fallback",
-  })),
+  ...config.openCodeModels.map(
+    (model): LiveRuntimeCase => ({
+      model,
+      nativeResumeKind: "acp_session_id",
+      provider: "openrouter",
+      runtime: "acp-fallback",
+      suite: "opencode",
+      transport: "acp-fallback",
+    }),
+  ),
 ].filter((runtimeCase) => config.suite === "all" || config.suite === runtimeCase.suite);
 const representativeOpenCodeModel =
   config.openCodeModels.find((model) => model.includes("/deepseek/")) ?? config.openCodeModels[0]!;
@@ -464,22 +478,37 @@ function isPromptInputProjection(event: DriverArtifactTestEvent): boolean {
   );
 }
 
+type PairedLifecycleTerminalKind =
+  | "item.completed"
+  | CanonicalMessageTerminalKind
+  | CanonicalThoughtTerminalKind;
+
+function isPairedLifecycleTerminal(
+  event: DriverArtifactTestEvent,
+  terminalKinds: readonly PairedLifecycleTerminalKind[],
+): boolean {
+  return terminalKinds.includes(event.kind as PairedLifecycleTerminalKind);
+}
+
 function expectPairedLifecycle(
   events: readonly DriverArtifactTestEvent[],
   startedKind: "item.started" | "message.started" | "thought.started",
-  completedKind: "item.completed" | "message.completed" | "thought.completed",
+  terminalKinds: readonly PairedLifecycleTerminalKind[],
   idField: "itemId" | "messageId" | "thoughtId",
   runTerminalIndex: number,
 ): void {
   for (const event of events.filter(
-    (candidate) => candidate.kind === startedKind || candidate.kind === completedKind,
+    (candidate) =>
+      candidate.kind === startedKind || isPairedLifecycleTerminal(candidate, terminalKinds),
   )) {
     expect(payloadString(event, idField)).not.toBeNull();
   }
 
   const ids = new Set(
     events
-      .filter((event) => event.kind === startedKind || event.kind === completedKind)
+      .filter(
+        (event) => event.kind === startedKind || isPairedLifecycleTerminal(event, terminalKinds),
+      )
       .map((event) => payloadString(event, idField))
       .filter((id): id is string => id !== null),
   );
@@ -488,14 +517,17 @@ function expectPairedLifecycle(
     const started = events
       .map((event, index) => ({ event, index }))
       .filter(({ event }) => event.kind === startedKind && payloadString(event, idField) === id);
-    const completed = events
+    const terminals = events
       .map((event, index) => ({ event, index }))
-      .filter(({ event }) => event.kind === completedKind && payloadString(event, idField) === id);
+      .filter(
+        ({ event }) =>
+          isPairedLifecycleTerminal(event, terminalKinds) && payloadString(event, idField) === id,
+      );
 
     expect(started).toHaveLength(1);
-    expect(completed).toHaveLength(1);
-    expect(started[0]!.index).toBeLessThan(completed[0]!.index);
-    expect(completed[0]!.index).toBeLessThan(runTerminalIndex);
+    expect(terminals).toHaveLength(1);
+    expect(started[0]!.index).toBeLessThan(terminals[0]!.index);
+    expect(terminals[0]!.index).toBeLessThan(runTerminalIndex);
   }
 }
 
@@ -530,7 +562,7 @@ function expectSingleRunLifecycle(
 
   for (const [index, event] of runEvents.entries()) {
     if (isRunProjection(event)) {
-      if (!isPromptInputProjection(event)) {
+      if (!isPromptInputProjection(event) && !isOpenAiRuntimeNotice(event)) {
         expect(startedIndex).toBeLessThan(index);
       }
       expect(index).toBeLessThan(terminalIndex);
@@ -540,21 +572,24 @@ function expectSingleRunLifecycle(
   expectPairedLifecycle(
     runEvents,
     "message.started",
-    "message.completed",
+    CANONICAL_MESSAGE_TERMINAL_KINDS,
     "messageId",
     terminalIndex,
   );
-  expectPairedLifecycle(runEvents, "item.started", "item.completed", "itemId", terminalIndex);
+  expectPairedLifecycle(runEvents, "item.started", ["item.completed"], "itemId", terminalIndex);
   expectPairedLifecycle(
     runEvents,
     "thought.started",
-    "thought.completed",
+    CANONICAL_THOUGHT_TERMINAL_KINDS,
     "thoughtId",
     terminalIndex,
   );
 
   for (const [index, event] of runEvents.entries()) {
     if (event.kind !== "message.delta" && event.kind !== "message.added") {
+      continue;
+    }
+    if (isOpenAiRuntimeNotice(event)) {
       continue;
     }
     if (event.kind === "message.added" && payloadRecord(event)["role"] !== "agent") {
@@ -571,15 +606,15 @@ function expectSingleRunLifecycle(
       (candidate) =>
         candidate.kind === "message.started" && payloadString(candidate, "messageId") === messageId,
     );
-    const messageCompletedIndex = runEvents.findIndex(
+    const messageTerminalIndex = runEvents.findIndex(
       (candidate) =>
-        candidate.kind === "message.completed" &&
+        isCanonicalMessageTerminalKind(candidate.kind) &&
         payloadString(candidate, "messageId") === messageId,
     );
     expect(messageStartedIndex).toBeGreaterThanOrEqual(0);
-    expect(messageCompletedIndex).toBeGreaterThanOrEqual(0);
+    expect(messageTerminalIndex).toBeGreaterThanOrEqual(0);
     expect(messageStartedIndex).toBeLessThan(index);
-    expect(index).toBeLessThan(messageCompletedIndex);
+    expect(index).toBeLessThan(messageTerminalIndex);
   }
 
   for (const [index, event] of runEvents.entries()) {
@@ -596,21 +631,21 @@ function expectSingleRunLifecycle(
       (candidate) =>
         candidate.kind === "thought.started" && payloadString(candidate, "thoughtId") === thoughtId,
     );
-    const thoughtCompletedIndex = runEvents.findIndex(
+    const thoughtTerminalIndex = runEvents.findIndex(
       (candidate) =>
-        candidate.kind === "thought.completed" &&
+        isCanonicalThoughtTerminalKind(candidate.kind) &&
         payloadString(candidate, "thoughtId") === thoughtId,
     );
     expect(thoughtStartedIndex).toBeGreaterThanOrEqual(0);
-    expect(thoughtCompletedIndex).toBeGreaterThanOrEqual(0);
+    expect(thoughtTerminalIndex).toBeGreaterThanOrEqual(0);
     expect(thoughtStartedIndex).toBeLessThan(index);
-    expect(index).toBeLessThan(thoughtCompletedIndex);
+    expect(index).toBeLessThan(thoughtTerminalIndex);
   }
 
   const toolEvents = runEvents.filter((event) => event.kind === "tool.call.updated");
   for (const event of toolEvents) {
     expect(payloadString(event, "toolCallId")).not.toBeNull();
-    expect(["completed", "failed", "running"]).toContain(String(payloadRecord(event)["status"]));
+    expect(isCanonicalToolCallStatus(payloadRecord(event)["status"])).toBe(true);
   }
 
   for (const toolCallId of new Set(
@@ -627,15 +662,15 @@ function expectSingleRunLifecycle(
     const terminalUpdates = updates.filter(
       ({ event }) => payloadRecord(event)["status"] !== "running",
     );
+    const lifecycle = inspectToolCallUpdateLifecycle(
+      updates.map(({ event }) => payloadRecord(event)["status"]),
+    );
 
-    expect(updates.some(({ event }) => payloadRecord(event)["status"] === "running")).toBe(true);
-    expect(terminalUpdates).toHaveLength(1);
-    expect(
-      updates.every(
-        ({ event, index }) =>
-          payloadRecord(event)["status"] !== "running" || index < terminalUpdates[0]!.index,
-      ),
-    ).toBe(true);
+    expect(lifecycle.hasRunningUpdate).toBe(true);
+    expect(lifecycle.terminalStatuses.length).toBeGreaterThan(0);
+    expect(new Set(lifecycle.terminalStatuses).size).toBe(1);
+    expect(lifecycle.runningAfterTerminal).toBe(false);
+    expect(terminalUpdates.length).toBe(lifecycle.terminalStatuses.length);
   }
 
   const usageEvents = runEvents.filter((candidate) => candidate.kind === "usage.updated");
@@ -733,28 +768,13 @@ function expectNoHistoricalRunProjections(
   expect(
     controller.events
       .slice(0, runStartedIndex)
-      .filter((event) => isRunProjection(event) && !isPromptInputProjection(event)),
+      .filter(
+        (event) =>
+          isRunProjection(event) &&
+          !isPromptInputProjection(event) &&
+          !isOpenAiRuntimeNotice(event),
+      ),
   ).toEqual([]);
-}
-
-function createOpenCodeConfig(model: string): string {
-  const slug = model.slice("openrouter/".length);
-  return JSON.stringify({
-    $schema: "https://opencode.ai/config.json",
-    enabled_providers: ["openrouter"],
-    model,
-    permission: {
-      "*": "ask",
-    },
-    provider: {
-      openrouter: {
-        models: {
-          [`~${slug}`]: {},
-        },
-      },
-    },
-    small_model: model,
-  });
 }
 
 function runtimeEnvironment(runtimeCase: LiveRuntimeCase): Record<string, string> {
@@ -773,7 +793,7 @@ function runtimeEnvironment(runtimeCase: LiveRuntimeCase): Record<string, string
       };
     case "opencode":
       return {
-        OPENCODE_CONFIG_CONTENT: createOpenCodeConfig(runtimeCase.model),
+        OPENCODE_CONFIG_CONTENT: createOpenCodeConfig(runtimeCase.model, config.openRouterBaseUrl),
       };
   }
 }
@@ -1106,7 +1126,7 @@ async function testWorkspace(runtimeCase: LiveRuntimeCase): Promise<void> {
     await withController(runtimeCase, paths, async (controller) => {
       const events = await runTurn(
         controller,
-        `Use available file and shell tools to perform every step in order: read ${JSON.stringify(sourceName)}; create ${JSON.stringify(outputName)} containing exactly the token you read; replace before with after in ${JSON.stringify(editName)}; delete ${JSON.stringify(deleteName)}. Reply with exactly workspace-done.`,
+        `Use available file and shell tools to perform every step in order: read ${JSON.stringify(sourceName)}; create ${JSON.stringify(outputName)} containing exactly the token you read; replace before with after in ${JSON.stringify(editName)} and preserve its trailing newline; delete ${JSON.stringify(deleteName)}. Reply with exactly workspace-done.`,
       );
 
       expect((await readFile(join(paths.workspacePath, outputName), "utf8")).trim()).toBe(token);
@@ -2364,6 +2384,10 @@ async function testSupervisedPermission(runtimeCase: LiveRuntimeCase): Promise<v
         requestId: rejectedRequestId,
         runId: rejected.runId,
       });
+      const rejectedTerminalKind =
+        runtimeCase.runtime === "openai-runtime" ? "run.cancelled" : "run.completed";
+      const rejectedInputCommandStatus =
+        runtimeCase.runtime === "openai-runtime" ? "cancelled" : "completed";
       const [rejectUpdate, rejectedUpdate, rejectedResolution, rejectedEvent] = await Promise.all([
         controller.waitForCommandTerminal(rejectId, LIVE_TURN_TIMEOUT_MS),
         controller.waitForCommandTerminal(rejected.commandId, LIVE_TURN_TIMEOUT_MS),
@@ -2376,20 +2400,20 @@ async function testSupervisedPermission(runtimeCase: LiveRuntimeCase): Promise<v
           "rejected permission resolution",
         ),
         controller.waitForEvent(
-          (event) => event.runId === rejected.runId && event.kind === "run.completed",
+          (event) => event.runId === rejected.runId && event.kind === rejectedTerminalKind,
           rejected.eventIndex,
           LIVE_TURN_TIMEOUT_MS,
-          "rejected run completion",
+          "rejected run terminal",
         ),
       ]);
       expect(rejectUpdate.status).toBe("completed");
-      expect(rejectedUpdate.status).toBe("completed");
+      expect(rejectedUpdate.status).toBe(rejectedInputCommandStatus);
       expect(payloadRecord(rejectedResolution)).toMatchObject({
         outcome: "reject_once",
         reason: "rejected",
         requestId: rejectedRequestId,
       });
-      expect(rejectedEvent.kind).toBe("run.completed");
+      expect(rejectedEvent.kind).toBe(rejectedTerminalKind);
       expectPermissionLifecycle(
         controller.eventsSince(rejected.eventIndex),
         rejected.runId,
@@ -2399,7 +2423,7 @@ async function testSupervisedPermission(runtimeCase: LiveRuntimeCase): Promise<v
         controller,
         rejected.eventIndex,
         rejected.runId,
-        "run.completed",
+        rejectedTerminalKind,
       );
       expect(existsSync(join(paths.workspacePath, "tool-result-b.txt"))).toBe(false);
 
