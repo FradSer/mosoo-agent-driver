@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, watch } from "node:fs";
 import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1977,6 +1977,7 @@ setInterval(() => {}, 1000);
   ] as const)("%s the 1024-message queue limit", async (_label, messageCount, rejected) => {
     const firstNotification = Promise.withResolvers<void>();
     const notificationGate = Promise.withResolvers<void>();
+    const notificationsHandled = Promise.withResolvers<void>();
     let handled = 0;
     const harness = await createClientHarness(
       (directory) => `
@@ -2011,17 +2012,25 @@ setInterval(() => {}, 1000);
           firstNotification.resolve();
           await notificationGate.promise;
         }
+        if (handled === messageCount) {
+          notificationsHandled.resolve();
+        }
       },
     );
+    const burstFlushed = Promise.withResolvers<void>();
+    const watcher = watch(harness.directory, (_event, filename) => {
+      if (filename === "burst-flushed") burstFlushed.resolve();
+    });
+    watcher.once("error", burstFlushed.reject);
 
     try {
       await harness.client.start();
       await firstNotification.promise;
-      const burstFlushedFile = Bun.file(join(harness.directory, "burst-flushed"));
+      const burstFlushedPath = join(harness.directory, "burst-flushed");
       expect(handled).toBe(1);
       expect(harness.protocolErrors).toEqual([]);
       if (!rejected) {
-        expect(await burstFlushedFile.exists()).toBe(false);
+        expect(existsSync(burstFlushedPath)).toBe(false);
       }
 
       notificationGate.resolve();
@@ -2030,12 +2039,13 @@ setInterval(() => {}, 1000);
         await expect(drain).rejects.toThrow("message queue limit exceeded");
       } else {
         await drain;
-        let burstFlushed = await burstFlushedFile.exists();
-        for (let attempt = 0; attempt < 100 && !burstFlushed; attempt += 1) {
-          await Bun.sleep(5);
-          burstFlushed = await burstFlushedFile.exists();
-        }
-        expect(burstFlushed).toBe(true);
+        const completed = await settlePromiseWithTimeout(
+          Promise.all([burstFlushed.promise, notificationsHandled.promise]),
+          { label: "notification burst flush and delivery", timeoutMs: 1_000 },
+        );
+        expect(completed.status).toBe("completed");
+        // Bun 1.4.0 caches a negative exists() result on a reused BunFile.
+        expect(existsSync(burstFlushedPath)).toBe(true);
       }
       expect(handled).toBe(Math.min(messageCount, 1_024));
       if (rejected) {
@@ -2045,6 +2055,7 @@ setInterval(() => {}, 1000);
         expect(harness.protocolErrors).toEqual([]);
       }
     } finally {
+      watcher.close();
       notificationGate.resolve();
       await harness.client.stop();
     }
