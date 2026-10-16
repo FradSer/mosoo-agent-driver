@@ -46,7 +46,6 @@ interface CancellationHarnessOptions {
   readonly emitInterruptedTurnOnStart?: boolean;
   readonly terminalNotificationBeforeTurnStartResponse?: boolean;
   readonly emitToolCompletionOnTurnStart?: boolean;
-  readonly environmentVariables?: Readonly<Record<string, string>>;
   readonly failCancellationRequest?: boolean;
   readonly failInitialThreadStart?: boolean;
   readonly holdCancellationRequest?: boolean;
@@ -488,14 +487,8 @@ process.stdin.on("data", (chunk) => {
     ...driverBootPayload,
     execution: {
       ...driverBootPayload.execution,
-      environment: {
-        ...driverBootPayload.execution.environment,
-        variables: {
-          ...driverBootPayload.execution.environment.variables,
-          ...cancellationOptions.environmentVariables,
-        },
-      },
       permissionPolicy,
+      provider: "openai",
       session: {
         ...driverBootPayload.execution.session,
         context: {
@@ -734,7 +727,6 @@ describe("OpenAI app-server startup", () => {
       "full_access",
       false,
       {
-        environmentVariables: { OPENAI_API_KEY: "resume-startup-key" },
         nativeResume: true,
       },
     );
@@ -747,7 +739,7 @@ describe("OpenAI app-server startup", () => {
 
       expect(firstLaunch.sqliteHome).toBe(harness.payload.execution.session.homePath);
       expect(JSON.parse(await readFile(authJsonPath, "utf8"))).toMatchObject({
-        OPENAI_API_KEY: "resume-startup-key",
+        OPENAI_API_KEY: driverBootPayload.execution.modelConnection.proxyGrant,
       });
       expect(await readFile(harness.requestLog, "utf8")).toContain('"method":"thread/resume"');
       await harness.backend.stop(harness.context, "test complete", new AbortController().signal);

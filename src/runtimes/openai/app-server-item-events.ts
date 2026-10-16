@@ -2,6 +2,7 @@ import type { AgentDriverContext } from "../../core/agent-driver-backend";
 import type { DriverEventInput } from "../../protocol/events";
 import { chunkJsonText } from "../provider-json";
 import { createRuntimeSourceEventId, toRuntimePublicId } from "../runtime-public-id";
+import { createThoughtContentEvents } from "../thought-content";
 import {
   OpenAiAgentTaskState,
   openAiAgentTasksClosedEvent,
@@ -388,7 +389,11 @@ export class OpenAiAppServerItemEventBridge {
     this.#tools.reset();
   }
 
-  terminalEvents(outcome: OpenAiTerminalOutcome): [DriverEventInput, ...DriverEventInput[]] {
+  async terminalEvents(
+    context: AgentDriverContext,
+    outcome: OpenAiTerminalOutcome,
+  ): Promise<[DriverEventInput, ...DriverEventInput[]]> {
+    await this.#messages.publishReasoningSnapshots(context, this.#push);
     return [
       openAiAgentTasksClosedEvent(),
       ...this.#messages.terminalEvents(outcome),
@@ -624,10 +629,11 @@ export class OpenAiAppServerItemEventBridge {
       return;
     }
 
+    const commitText = this.#messages.prepareReasoningDelta(messageId, delta);
     this.#messages.ensureReasoning(messageId, events, false);
     events.push(
       ...chunkOpenAiText(delta).map((contentDelta): DriverEventInput => ({
-        delivery: "lossless",
+        delivery: "best_effort",
         kind: "thought.delta",
         payload: {
           channel: "summary",
@@ -637,9 +643,9 @@ export class OpenAiAppServerItemEventBridge {
       })),
     );
 
+    commitText();
     await this.#push(context, "driver.openai.reasoning.summary", events);
     this.#messages.ensureReasoning(messageId, [], true);
-    this.#messages.appendReasoningText(messageId, delta);
   }
 
   async onReasoningPart(context: AgentDriverContext, params: JsonObject): Promise<void> {
@@ -1055,61 +1061,31 @@ export class OpenAiAppServerItemEventBridge {
       : [];
     const messageId = this.#messages.reasoningId(context, itemId);
     const summaryText = summary.join("\n\n");
-    const currentText = this.#messages.currentReasoningText(messageId);
-    // A terminal turn snapshot can be the first frame seen by a fresh Driver.
-    // Active-run Driver loss is terminal, so only a live instance can have a durable prefix to skip.
-    const missingText = summaryText.startsWith(currentText)
-      ? summaryText.slice(currentText.length)
-      : currentText.length === 0
-        ? summaryText
-        : "";
-
-    if (
-      summaryText.length > 0 &&
-      currentText.length > 0 &&
-      summaryText !== currentText &&
-      missingText.length === 0
-    ) {
-      context.logger.warn("driver.openai.reasoning.final_text.mismatch", {
-        currentLength: currentText.length,
-        finalLength: summaryText.length,
-        itemId,
-      });
+    if (summaryText.length === 0 && !this.#messages.isReasoningStarted(messageId)) {
+      return { commit: () => {}, events: [] };
     }
-
-    if (missingText.length > 0) {
-      this.#messages.ensureReasoning(messageId, events, false);
-      events.push(
-        ...chunkOpenAiText(missingText).map((contentDelta): DriverEventInput => ({
-          delivery: "lossless",
-          kind: "thought.delta",
-          payload: {
-            channel: "summary",
-            contentDelta,
-            thoughtId: messageId,
-          },
-        })),
-      );
-    }
-
-    const shouldStart = missingText.length > 0 && !this.#messages.isReasoningStarted(messageId);
-    if (this.#messages.isReasoningStarted(messageId) || shouldStart) {
-      events.push({
+    const commitText = this.#messages.prepareReasoningText(messageId, summaryText);
+    this.#messages.ensureReasoning(messageId, events, false);
+    events.push(
+      ...createThoughtContentEvents(
+        messageId,
+        summaryText,
+        `openai.reasoning.snapshot:${messageId}`,
+      ),
+      {
         kind: "thought.completed",
         payload: {
           channel: "summary",
           thoughtId: messageId,
         },
         sourceEventId: `openai.reasoning.completed:${messageId}:terminal`,
-      });
-    }
+      },
+    );
+    commitText();
 
     return {
       commit: () => {
-        if (shouldStart) {
-          this.#messages.ensureReasoning(messageId, [], true);
-        }
-        this.#messages.appendReasoningText(messageId, missingText);
+        this.#messages.ensureReasoning(messageId, [], true);
         this.#messages.markReasoningEnded(messageId);
       },
       events,

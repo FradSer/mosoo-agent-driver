@@ -12,6 +12,7 @@ import type { RunId } from "../src/protocol/id";
 import type { JsonObject } from "../src/protocol/json";
 import { parseNativeCheckpoint } from "../src/protocol/native-checkpoint";
 import { readNativeCheckpoint } from "../src/runtimes/native-checkpoint";
+import { readPiModelConfiguration } from "../src/runtimes/pi/pi-configuration";
 import { PiDriverBackend } from "../src/runtimes/pi/pi-driver-backend";
 import { raceWithAbort } from "../src/utils/async";
 import {
@@ -25,7 +26,7 @@ afterEach(async () => {
   for (const dispose of cleanup.splice(0).toReversed()) await dispose();
 });
 
-async function harness(nativeText = "done") {
+async function harness(nativeText = "done", nativeThinking?: string) {
   const root = await mkdtemp(join(tmpdir(), "mosoo-pi-lifecycle-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const home = join(root, "pi");
@@ -38,6 +39,11 @@ async function harness(nativeText = "done") {
     execution: {
       ...driverStartInput.execution,
       model: "test-model",
+      modelConnection: {
+        proxyGrant: "test-grant",
+        proxyUrl: "http://127.0.0.1:1",
+        protocol: "openai-chat-completions" as const,
+      },
       session: { ...driverStartInput.execution.session, homePath: root, cwd: root },
     },
   };
@@ -49,7 +55,7 @@ async function harness(nativeText = "done") {
   let onFailure!: (error: Error) => void;
   const hooks = {
     push: async (_events: readonly DriverEventInput[], _signal?: AbortSignal) => {},
-    request: async (_type: string): Promise<void> => {},
+    request: async (_type: string, _signal?: AbortSignal): Promise<void> => {},
     stop: async (): Promise<void> => {},
     permission: async (_signal?: AbortSignal): Promise<"allow_once"> => "allow_once",
   };
@@ -83,21 +89,31 @@ async function harness(nativeText = "done") {
     ports: { skill: { materialize: async () => [] } },
   });
   const backend = new PiDriverBackend(payload, {
-    prepare: async () => ({ args: [], command: "unused", cwd: root, env: {}, home }),
+    prepare: async () => ({
+      args: [],
+      command: "unused",
+      cwd: root,
+      env: {},
+      home,
+      modelConfiguration: readPiModelConfiguration(payload.execution),
+    }),
     createClient: (_config, receive, fail) => {
-      onRecord = receive;
+      onRecord = (record) => receive(record, Buffer.byteLength(JSON.stringify(record)));
       onFailure = fail;
       return {
-        request: async (type) => {
+        request: async (type, _fields, signal) => {
           commands.push(type);
-          await hooks.request(type);
+          await hooks.request(type, signal);
           if (type === "get_state")
-            return { model: { id: "test-model", provider: "mosoo" }, sessionFile };
+            return {
+              model: { id: "test-model", provider: payload.execution.provider },
+              sessionFile,
+            };
           if (type === "prompt") {
             prompt.resolve();
             return { disposition: "started" };
           }
-          if (type === "abort") await onRecord({ type: "agent_settled" });
+          if (type === "abort") void onRecord({ type: "agent_settled", aborted: true }).catch(fail);
           return {};
         },
         send: async () => {},
@@ -108,11 +124,16 @@ async function harness(nativeText = "done") {
       };
     },
   });
-  cleanup.push(() => backend.stop(context, "cleanup", AbortSignal.timeout(2_000)));
+  cleanup.push(async () => {
+    await backend.stop(context, "cleanup", AbortSignal.timeout(2_000));
+  });
   await backend.start(context, AbortSignal.timeout(2_000));
   const nativeMessage: JsonObject = {
     role: "assistant",
-    content: [{ type: "text", text: nativeText }],
+    content: [
+      ...(nativeThinking === undefined ? [] : [{ type: "thinking", thinking: nativeThinking }]),
+      { type: "text", text: nativeText },
+    ],
     stopReason: "stop",
     timestamp: 1,
   };
@@ -167,6 +188,217 @@ async function harness(nativeText = "done") {
   };
 }
 
+test.each([
+  { name: "count", count: 1024, bytes: 0 },
+  { name: "bytes", count: 4, bytes: 8 * 1024 * 1024 - 256 },
+])("bounds permission $name while requests await decisions", async (input) => {
+  const run = await harness();
+  const release = Promise.withResolvers<void>();
+  let permissions = 0;
+  run.hooks.permission = async (signal) => {
+    permissions++;
+    await raceWithAbort(release.promise, signal);
+    return "allow_once";
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  const record: JsonObject = {
+    type: "extension_ui_request",
+    method: "confirm",
+    title: "mosoo.tool_permission",
+    message: JSON.stringify({ toolCallId: "tool", toolName: "read" }),
+    data: "x".repeat(input.bytes),
+  };
+  const drained = Promise.allSettled(
+    Array.from({ length: input.count }, (_, index) => run.emit({ ...record, id: String(index) })),
+  );
+  try {
+    const overflow = await run.emit({ ...record, id: "overflow" }).catch((error: unknown) => error);
+    expect(overflow).toMatchObject({ message: "Pi permission queue limit exceeded." });
+    expect(permissions).toBe(input.count);
+    run.fail(overflow as Error);
+    release.resolve();
+    await drained;
+    expect(await outcome).toBe(overflow);
+    expect(run.stopped()).toBe(1);
+    expect(run.events.filter((event) => event.kind === "run.failed")).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
+});
+
+test("batches a long thinking stream behind slow ACKs and restores dropped previews", async () => {
+  const run = await harness("done", "Final summary.");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let maximumBatch = 0;
+  run.hooks.push = async (events) => {
+    maximumBatch = Math.max(maximumBatch, events.length);
+    if (events.some((event) => event.kind === "message.started")) {
+      entered.resolve();
+      await release.promise;
+    }
+  };
+  const outcome = run.turn();
+  const completion = run.complete();
+  await entered.promise;
+  const streamed = Array.from({ length: 1500 }, () =>
+    run.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hello " },
+    }),
+  );
+  release.resolve();
+  await Promise.all(streamed);
+  await completion;
+  await outcome;
+  expect(maximumBatch).toBeGreaterThan(1);
+  expect(run.events.filter((event) => event.kind === "thought.delta").length).toBeLessThan(1500);
+  expect(
+    run.events
+      .filter((event) => event.kind === "thought.updated")
+      .map((event) => (event.payload as JsonObject)["content"])
+      .join(""),
+  ).toBe("Final summary.");
+  expect(run.events.filter((event) => event.kind === "run.completed")).toHaveLength(1);
+  expect(run.stopped()).toBe(0);
+});
+
+test("closes a tool with its arguments when the completion cannot enter the event queue", async () => {
+  const run = await harness();
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  const args = { path: "report.txt" };
+  await run.emit({ type: "message_start", message: { role: "assistant" } });
+  await run.emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "tool", name: "mcp__report", arguments: args }],
+      stopReason: "toolUse",
+    },
+  });
+  await run.emit({
+    type: "tool_execution_start",
+    toolCallId: "tool",
+    toolName: "mcp__report",
+    args,
+  });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  run.hooks.push = async (events) => {
+    if (events.some((event) => event.kind === "tool.call.updated")) {
+      entered.resolve();
+      await release.promise;
+    }
+  };
+  const progress = Promise.allSettled(
+    Array.from({ length: 32 }, () =>
+      run.emit({
+        type: "tool_execution_update",
+        toolCallId: "tool",
+        toolName: "mcp__report",
+        partialResult: { content: [{ type: "text", text: "x".repeat(1_024 * 1_024 - 512) }] },
+      }),
+    ),
+  );
+  try {
+    await entered.promise;
+    const completion = run.emit({
+      type: "tool_execution_end",
+      toolCallId: "tool",
+      toolName: "mcp__report",
+      isError: false,
+      result: { content: [{ type: "text", text: "x".repeat(20 * 1_024) }] },
+    });
+    await expect(completion).rejects.toThrow("Driver event queue exceeds 33554432 UTF-8 bytes.");
+  } finally {
+    release.resolve();
+  }
+  await progress;
+  expect(await outcome).toMatchObject({
+    message: "Driver event queue exceeds 33554432 UTF-8 bytes.",
+  });
+  const endings = run.events.filter(
+    (event) =>
+      event.kind === "tool.call.updated" && (event.payload as JsonObject)["status"] !== "running",
+  );
+  expect(endings.map((event) => event.payload)).toEqual([
+    expect.objectContaining({
+      toolCallId: "tool",
+      status: "failed",
+      rawInput: JSON.stringify(args),
+    }),
+  ]);
+  expect(run.events.at(-1)?.kind).toBe("run.failed");
+});
+
+test.each(["file rejection", "lost receipt"])(
+  "preserves admitted tool completion after %s without a competing failed tool",
+  async (failure) => {
+    const run = await harness();
+    const outcome = run.turn().catch((error: unknown) => error);
+    await run.prompt.promise;
+    const args = { path: "report.txt", content: "done" };
+    await run.emit({ type: "message_start", message: { role: "assistant" } });
+    await run.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool", name: "write", arguments: args }],
+        stopReason: "toolUse",
+      },
+    });
+    await run.emit({ type: "tool_execution_start", toolCallId: "tool", toolName: "write", args });
+    let rejected = false;
+    const completionAttempts: (string | undefined)[] = [];
+    run.hooks.push = async (events) => {
+      const completed = events.find(
+        (event) =>
+          event.kind === "tool.call.updated" &&
+          (event.payload as JsonObject)["status"] === "completed",
+      );
+      if (completed) completionAttempts.push(completed.sourceEventId);
+      if (rejected) return;
+      if (failure === "lost receipt" && completed) {
+        rejected = true;
+        throw new Error("completion receipt lost");
+      }
+      const changed = events.find((event) => event.kind === "file.change.updated");
+      if (failure === "file rejection" && changed) {
+        rejected = true;
+        throw new DriverEventRejectedError(
+          changed.sourceEventId!,
+          new Error("file event rejected"),
+        );
+      }
+    };
+    await expect(
+      run.emit({
+        type: "tool_execution_end",
+        toolCallId: "tool",
+        toolName: "write",
+        isError: false,
+        result: { content: [{ type: "text", text: "saved" }] },
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(await outcome).toBeInstanceOf(Error);
+    const endings = run.events.filter(
+      (event) =>
+        event.kind === "tool.call.updated" && (event.payload as JsonObject)["status"] !== "running",
+    );
+    expect(endings.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        toolCallId: "tool",
+        status: "completed",
+        rawInput: JSON.stringify(args),
+      }),
+    ]);
+    expect(new Set(completionAttempts).size).toBe(1);
+    expect(run.events.at(-1)?.kind).toBe("run.failed");
+  },
+);
+
 test("does not dispatch native work before the run start receipt, including cancellation", async () => {
   const run = await harness();
   const entered = Promise.withResolvers<void>();
@@ -180,6 +412,8 @@ test("does not dispatch native work before the run start receipt, including canc
   const outcome = run.turn().catch((error: unknown) => error);
   await entered.promise;
   const cancel = run.backend.cancelActiveTurn(run.context, "cancel before start ACK");
+  await raceWithAbort(cancel, AbortSignal.timeout(100));
+  await run.backend.cancelActiveTurn(run.context, "duplicate cancellation");
   expect(run.commands).toEqual(["get_state"]);
   release.resolve();
   await cancel;
@@ -189,6 +423,376 @@ test("does not dispatch native work before the run start receipt, including canc
     run.events.filter((event) => event.kind.startsWith("run.")).map((event) => event.kind),
   ).toEqual(["run.started", "run.cancel.requested", "run.cancelled"]);
 });
+
+test("requests cancellation promptly while Host receipts are slow and reuses the session", async () => {
+  const run = await harness();
+  const receiptEntered = Promise.withResolvers<void>();
+  const releaseReceipt = Promise.withResolvers<void>();
+  let finished = false;
+  run.hooks.push = async (events) => {
+    if (events.some((event) => event.kind === "run.cancel.requested")) {
+      receiptEntered.resolve();
+      await releaseReceipt.promise;
+    }
+  };
+  const outcome = run.turn().catch((error: unknown) => {
+    finished = true;
+    return error;
+  });
+  await run.prompt.promise;
+  await raceWithAbort(
+    run.backend.cancelActiveTurn(run.context, "cancel with slow ACK"),
+    AbortSignal.timeout(100),
+  );
+  await receiptEntered.promise;
+  await run.backend.cancelActiveTurn(run.context, "repeat cancel");
+  await Bun.sleep(2_100);
+  expect(finished).toBe(false);
+  expect(run.stopped()).toBe(0);
+  expect(run.commands.filter((command) => command === "abort")).toHaveLength(1);
+  releaseReceipt.resolve();
+  expect(await outcome).toMatchObject({ name: "DriverTurnCancelledError" });
+  const secondPrompt = Promise.withResolvers<void>();
+  run.hooks.request = async (type) => {
+    if (type === "prompt") secondPrompt.resolve();
+  };
+  const next = run.turn(DRIVER_TEST_IDS.secondRunId);
+  await secondPrompt.promise;
+  await run.complete();
+  await next;
+  expect(run.events.filter((event) => event.kind === "run.cancelled")).toHaveLength(1);
+  expect(run.events.filter((event) => event.kind === "run.completed")).toHaveLength(1);
+  expect(run.stopped()).toBe(0);
+}, 10_000);
+
+test("cancellation waits for prompt admission before aborting native work", async () => {
+  const run = await harness();
+  const admissionEntered = Promise.withResolvers<void>();
+  const releaseAdmission = Promise.withResolvers<void>();
+  run.hooks.request = async (type) => {
+    if (type === "prompt") {
+      admissionEntered.resolve();
+      await releaseAdmission.promise;
+    }
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await admissionEntered.promise;
+  await raceWithAbort(
+    run.backend.cancelActiveTurn(run.context, "cancel during prompt admission"),
+    AbortSignal.timeout(100),
+  );
+  expect(run.commands).not.toContain("abort");
+  releaseAdmission.resolve();
+  expect(await outcome).toMatchObject({ name: "DriverTurnCancelledError" });
+  expect(run.commands.filter((command) => command === "abort")).toHaveLength(1);
+  const secondPrompt = Promise.withResolvers<void>();
+  run.hooks.request = async (type) => {
+    if (type === "prompt") secondPrompt.resolve();
+  };
+  const next = run.turn(DRIVER_TEST_IDS.secondRunId);
+  await secondPrompt.promise;
+  await run.complete();
+  await next;
+  expect(run.stopped()).toBe(0);
+});
+
+test("failed prompt admission during cancellation finishes cleanup with one failed terminal", async () => {
+  const run = await harness();
+  const admissionEntered = Promise.withResolvers<void>();
+  const releaseAdmission = Promise.withResolvers<void>();
+  run.hooks.request = async (type) => {
+    if (type === "prompt") {
+      admissionEntered.resolve();
+      await releaseAdmission.promise;
+    }
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await admissionEntered.promise;
+  await run.backend.cancelActiveTurn(run.context, "cancel during rejected prompt");
+  releaseAdmission.reject(new Error("native prompt rejected"));
+  expect(await outcome).toMatchObject({ name: "DriverTurnCancellationCleanupError" });
+  expect(run.commands).not.toContain("abort");
+  expect(run.stopped()).toBeGreaterThan(0);
+  expect(
+    run.events
+      .filter((event) => ["run.failed", "run.cancelled", "run.completed"].includes(event.kind))
+      .map((event) => event.kind),
+  ).toEqual(["run.failed"]);
+});
+
+test("native cancellation settles even when an earlier event receipt is still pending", async () => {
+  const run = await harness();
+  const receiptEntered = Promise.withResolvers<void>();
+  const releaseReceipt = Promise.withResolvers<void>();
+  run.hooks.push = async (events) => {
+    if (events.some((event) => event.kind === "message.added")) {
+      receiptEntered.resolve();
+      await releaseReceipt.promise;
+    }
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  await run.emit({ type: "message_start", message: { role: "assistant" } });
+  const event = run.emit({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+  });
+  await receiptEntered.promise;
+  await run.backend.cancelActiveTurn(run.context, "cancel with event backlog");
+  await Bun.sleep(5_100);
+  expect(run.stopped()).toBe(0);
+  releaseReceipt.resolve();
+  await event;
+  expect(await outcome).toMatchObject({ name: "DriverTurnCancelledError" });
+  expect(run.stopped()).toBe(0);
+}, 10_000);
+
+test("fails an unsolicited native abort instead of completing the turn", async () => {
+  const run = await harness();
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  await run.emit({ type: "agent_settled", aborted: true });
+  expect(await outcome).toMatchObject({ message: "Pi aborted the native turn." });
+  expect(run.events.filter((event) => event.kind === "run.completed")).toHaveLength(0);
+  expect(run.events.filter((event) => event.kind === "run.failed")).toHaveLength(1);
+});
+
+test("stop waits for cancelled terminal delivery and turn cleanup", async () => {
+  const run = await harness();
+  const receiptEntered = Promise.withResolvers<void>();
+  const releaseReceipt = Promise.withResolvers<void>();
+  run.hooks.push = async (events) => {
+    if (events.some((event) => event.kind === "run.cancelled")) {
+      receiptEntered.resolve();
+      await releaseReceipt.promise;
+    }
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  await run.backend.cancelActiveTurn(run.context, "cancel");
+  await receiptEntered.promise;
+  let stopped = false;
+  const stop = run.backend.stop(run.context, "shutdown", AbortSignal.timeout(2_000)).then(() => {
+    stopped = true;
+  });
+  await Bun.sleep(0);
+  expect(stopped).toBe(false);
+  releaseReceipt.resolve();
+  expect(await outcome).toMatchObject({ name: "DriverTurnCancelledError" });
+  await stop;
+  expect(stopped).toBe(true);
+});
+
+test("fails and reaps the process if native cancellation times out", async () => {
+  const run = await harness();
+  run.hooks.request = async (type, signal) => {
+    if (type === "abort") await raceWithAbort(new Promise<void>(() => {}), signal);
+  };
+  const outcome = run.turn().catch((error: unknown) => error);
+  await run.prompt.promise;
+  await run.backend.cancelActiveTurn(run.context, "cancel stalled native work");
+  expect(await outcome).toMatchObject({
+    name: "DriverTurnCancellationCleanupError",
+    message: "Pi cancellation could not preserve the native session.",
+  });
+  expect(run.stopped()).toBeGreaterThan(0);
+  expect(run.events.filter((event) => event.kind === "run.failed")).toHaveLength(1);
+  expect(run.events.filter((event) => event.kind === "run.cancelled")).toHaveLength(0);
+}, 10_000);
+
+test.each(["cancelled", "failed"])(
+  "acknowledges large partial thinking before the %s run terminal",
+  async (status) => {
+    const run = await harness();
+    const outcome = run.turn().catch((error: unknown) => error);
+    await run.prompt.promise;
+    await run.emit({ type: "message_start", message: { role: "assistant" } });
+    const partial = "思考😀".repeat(180_000);
+    await run.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: partial },
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    run.hooks.push = async (events) => {
+      if (events.some((event) => event.kind === "thought.updated")) {
+        entered.resolve();
+        await release.promise;
+      }
+      if (events.some((event) => event.kind === `run.${status}`)) {
+        expect(events.some((event) => event.kind === "thought.updated")).toBe(false);
+        expect(Buffer.byteLength(JSON.stringify(events))).toBeLessThan(1_024 * 1_024);
+      }
+    };
+    if (status === "cancelled") await run.backend.cancelActiveTurn(run.context, "stop");
+    else run.fail(new Error("native failed"));
+    await entered.promise;
+    expect(run.events.some((event) => event.kind === `run.${status}`)).toBe(false);
+    release.resolve();
+    await outcome;
+    const updates = run.events.filter((event) => event.kind === "thought.updated");
+    expect(updates.length).toBeGreaterThan(1);
+    expect(updates.map((event) => (event.payload as JsonObject)["content"]).join("")).toBe(partial);
+    expect(run.events.filter((event) => event.kind === "thought.cancelled")).toHaveLength(1);
+    expect(run.events.filter((event) => event.kind === `run.${status}`)).toHaveLength(1);
+  },
+);
+
+test.each([
+  { source: "thinking_end", count: 1 },
+  { source: "message_end", count: 9 },
+  { source: "message_end", count: 1_000 },
+])(
+  "recovers $count thoughts after $source cannot enter the event queue",
+  async ({ source, count }) => {
+    const run = await harness();
+    const outcome = run.turn().catch((error: unknown) => error);
+    await run.prompt.promise;
+    await run.emit({ type: "message_start", message: { role: "assistant" } });
+    await run.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool", name: "mcp__report", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    });
+    await run.emit({ type: "tool_execution_start", toolCallId: "tool", toolName: "mcp__report" });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const snapshotEntered = Promise.withResolvers<void>();
+    const releaseSnapshot = Promise.withResolvers<void>();
+    run.hooks.push = async (events) => {
+      if (events.some((event) => event.kind === "tool.call.updated")) {
+        entered.resolve();
+        await release.promise;
+      }
+      if (events.some((event) => event.kind === "thought.updated")) {
+        snapshotEntered.resolve();
+        await releaseSnapshot.promise;
+      }
+    };
+    const progress = Promise.allSettled(
+      Array.from({ length: 1_020 }, () =>
+        run.emit({ type: "tool_execution_update", toolCallId: "tool", toolName: "mcp__report" }),
+      ),
+    );
+    await entered.promise;
+    const toolEnd = run.emit({
+      type: "tool_execution_end",
+      toolCallId: "tool",
+      toolName: "mcp__report",
+    });
+    const messageStart = run.emit({ type: "message_start", message: { role: "assistant" } });
+    const content = Array.from({ length: count }, (_, index) => ({
+      type: "thinking",
+      thinking: `Final thought ${index}.`,
+    }));
+    const endings = [
+      ...(source === "thinking_end"
+        ? [
+            run
+              .emit({
+                type: "message_update",
+                assistantMessageEvent: {
+                  type: source,
+                  contentIndex: 0,
+                  content: content[0]!.thinking,
+                },
+              })
+              .catch((error: unknown) => error),
+          ]
+        : []),
+      run
+        .emit({ type: "message_end", message: { role: "assistant", content, stopReason: "stop" } })
+        .catch((error: unknown) => error),
+    ];
+    // Pi can start the next message in the same stdout chunk, before rejection handlers run.
+    const nextMessage = run.emit({ type: "message_start", message: { role: "assistant" } });
+    try {
+      for (const ending of endings) {
+        expect(await ending).toMatchObject({ message: "Driver event queue exceeds 1024 events." });
+      }
+    } finally {
+      release.resolve();
+    }
+    await Promise.all([progress, toolEnd, messageStart, nextMessage]);
+    try {
+      await raceWithAbort(snapshotEntered.promise, AbortSignal.timeout(2_000));
+      expect(run.events.some((event) => event.kind === "run.failed")).toBe(false);
+    } finally {
+      releaseSnapshot.resolve();
+    }
+    expect(await outcome).toMatchObject({ message: "Driver event queue exceeds 1024 events." });
+    const snapshots = run.events.filter((event) => event.kind === "thought.updated");
+    expect(snapshots.map((event) => (event.payload as JsonObject)["content"])).toEqual(
+      content.map((block) => block.thinking),
+    );
+    for (const snapshot of snapshots) {
+      const thoughtId = (snapshot.payload as JsonObject)["thoughtId"];
+      const thought = run.events.filter(
+        (event) => (event.payload as JsonObject)["thoughtId"] === thoughtId,
+      );
+      expect(thought.map((event) => event.kind)).toEqual([
+        "thought.started",
+        "thought.updated",
+        "thought.cancelled",
+      ]);
+    }
+    expect(
+      run.events
+        .filter((event) => ["run.failed", "run.completed", "run.cancelled"].includes(event.kind))
+        .map((event) => event.kind),
+    ).toEqual(["run.failed"]);
+    expect(run.events.at(-1)?.kind).toBe("run.failed");
+    expect(run.stopped()).toBe(1);
+  },
+);
+
+test.each([false, true])(
+  "preserves authoritative thought delivery failure without a competing terminal (cancel=%s)",
+  async (cancel) => {
+    const run = await harness();
+    const outcome = run.turn().catch((error: unknown) => error);
+    await run.prompt.promise;
+    await run.emit({ type: "message_start", message: { role: "assistant" } });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let deliveryError: DriverEventRejectedError | undefined;
+    run.hooks.push = async (events) => {
+      const update = events.find((event) => event.kind === "thought.updated");
+      if (update) {
+        entered.resolve();
+        await release.promise;
+        deliveryError = new DriverEventRejectedError(
+          update.sourceEventId!,
+          new Error("snapshot rejected"),
+        );
+        throw deliveryError;
+      }
+      const request = events.find((event) => event.kind === "run.cancel.requested");
+      if (request)
+        throw new DriverEventRejectedError(request.sourceEventId!, new Error("cancel rejected"));
+    };
+    const delivery = run
+      .emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "Final summary." },
+      })
+      .catch((error: unknown) => error);
+    await entered.promise;
+    if (cancel) await run.backend.cancelActiveTurn(run.context, "stop");
+    release.resolve();
+    expect(await delivery).toBe(deliveryError);
+    expect(await outcome).toBe(deliveryError);
+    expect(run.stopped()).toBe(1);
+    expect(
+      run.events.filter((event) =>
+        ["run.completed", "run.cancelled", "run.failed"].includes(event.kind),
+      ),
+    ).toEqual([]);
+  },
+);
 
 test("creates an independently readable checkpoint before completed delivery and waits for its receipt", async () => {
   const run = await harness();
@@ -363,7 +967,7 @@ test("waits for native cancellation when cancellation event delivery is rejected
   await Bun.sleep(0);
   expect(returned).toBe(false);
   releaseAbort.resolve();
-  expect(await cancel).toBeInstanceOf(DriverEventRejectedError);
+  expect(await cancel).toBeUndefined();
   expect(await outcome).toBeInstanceOf(DriverEventRejectedError);
   expect(run.stopped()).toBe(1);
   expect(run.events.filter((event) => event.kind === "run.cancelled")).toHaveLength(0);
