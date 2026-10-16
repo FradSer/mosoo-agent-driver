@@ -6,10 +6,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-import { DRIVER_PROTOCOL_VERSION } from "../src/protocol/boot";
+import { DRIVER_PROTOCOL_VERSION, type DriverModelConnection } from "../src/protocol/boot";
 import { parseRunId } from "../src/protocol/id";
 import { parseNativeCheckpoint, type NativeCheckpoint } from "../src/protocol/native-checkpoint";
-import { createOpenCodeConfig } from "./driver-artifact-live-config";
 import {
   CANONICAL_MESSAGE_TERMINAL_KINDS,
   CANONICAL_THOUGHT_TERMINAL_KINDS,
@@ -775,23 +774,25 @@ function expectNoHistoricalRunProjections(
   ).toEqual([]);
 }
 
-function runtimeEnvironment(runtimeCase: LiveRuntimeCase): Record<string, string> {
+function modelConnection(runtimeCase: LiveRuntimeCase): DriverModelConnection {
   switch (runtimeCase.suite) {
     case "openai":
       return {
-        OPENAI_API_KEY: "",
-        OPENAI_COMPATIBLE_API_KEY: config.key,
-        OPENAI_COMPATIBLE_BASE_URL: config.openRouterBaseUrl,
+        protocol: "openai-responses",
+        proxyGrant: config.key,
+        proxyUrl: config.openRouterBaseUrl,
       };
     case "anthropic":
       return {
-        ANTHROPIC_API_KEY: "",
-        ANTHROPIC_AUTH_TOKEN: config.key,
-        ANTHROPIC_BASE_URL: config.anthropicBaseUrl,
+        protocol: "anthropic-messages",
+        proxyGrant: config.key,
+        proxyUrl: config.anthropicBaseUrl,
       };
     case "opencode":
       return {
-        OPENCODE_CONFIG_CONTENT: createOpenCodeConfig(runtimeCase.model, config.openRouterBaseUrl),
+        protocol: "openai-chat-completions",
+        proxyGrant: config.key,
+        proxyUrl: config.openRouterBaseUrl,
       };
   }
 }
@@ -812,7 +813,6 @@ function createBootPayload(input: {
     bootToken: `artifact-test-${input.driverInstanceId}`,
     controlUrl: "http://127.0.0.1/unused",
     driverControlPort: 20_000,
-    driverGeneration: 0,
     driverInstanceId: input.driverInstanceId,
     execution: {
       builtInTools: BUILT_IN_TOOLS.map((name) => ({ enabled: true, name })),
@@ -826,9 +826,10 @@ function createBootPayload(input: {
         sessionId: input.sessionId,
       },
       environment: {
-        variables: runtimeEnvironment(runtimeCase),
+        variables: {},
       },
       model: runtimeCase.model,
+      modelConnection: modelConnection(runtimeCase),
       permissionPolicy: input.permissionPolicy ?? "full_access",
       profilePrompt:
         "Use available tools when requested, complete every requested step, and end with exactly the requested reply.",
@@ -885,16 +886,6 @@ async function createLivePaths(): Promise<LivePaths> {
   return { homePath, rootPath, workspacePath };
 }
 
-async function writeOpenCodeAuth(paths: LivePaths): Promise<void> {
-  const authDirectory = join(paths.homePath, ".local", "share", "opencode");
-  await mkdir(authDirectory, { recursive: true });
-  await writeFile(
-    join(authDirectory, "auth.json"),
-    `${JSON.stringify({ openrouter: { key: config.key, type: "api" } }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-}
-
 async function startController(input: {
   readonly heartbeatIntervalMs?: number | undefined;
   readonly mcpServers?: readonly LiveMcpServer[] | undefined;
@@ -904,10 +895,6 @@ async function startController(input: {
   readonly runtimeCase: LiveRuntimeCase;
   readonly sessionId: string;
 }): Promise<DriverArtifactTestController> {
-  if (input.runtimeCase.suite === "opencode") {
-    await writeOpenCodeAuth(input.paths);
-  }
-
   const driverInstanceId = createTestId();
   const controller = await DriverArtifactTestController.start({
     artifactPath: config.artifactPath,

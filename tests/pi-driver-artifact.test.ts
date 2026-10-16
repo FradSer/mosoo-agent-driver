@@ -4,8 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseNativeCheckpoint } from "../src/protocol/native-checkpoint";
 
+import { parseNativeCheckpoint } from "../src/protocol/native-checkpoint";
 import {
   DriverArtifactTestController,
   expectedDriverCapabilities,
@@ -73,20 +73,10 @@ test.skipIf(!existsSync(artifactPath))(
           ...driverBootPayload.execution,
           provider: "deepseek",
           model: "pi-test",
-          environment: {
-            variables: {
-              MOSOO_PI_PROXY_GRANT: "artifact-pi-grant",
-              MOSOO_PI_CONFIG_CONTENT: JSON.stringify({
-                providers: {
-                  mosoo: {
-                    api: "openai-completions",
-                    baseUrl: `http://127.0.0.1:${model.port}/v1`,
-                    apiKey: "${MOSOO_PI_PROXY_GRANT}",
-                    models: [{ id: "pi-test" }],
-                  },
-                },
-              }),
-            },
+          modelConnection: {
+            proxyGrant: "artifact-pi-grant",
+            proxyUrl: `http://127.0.0.1:${model.port}/v1`,
+            protocol: "openai-chat-completions",
           },
           session: {
             ...driverBootPayload.execution.session,
