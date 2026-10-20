@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -1787,6 +1787,10 @@ describe("ACP driver backend lifecycle", () => {
         await waitForAcpTestCondition(
           async () => (await harness.methods()).includes("session/cancel"),
           "ACP session/cancel request",
+        );
+        await waitForAcpTestCondition(
+          () => existsSync(harness.latePidPath),
+          "ACP cancellation child PID",
         );
         gate.release();
         await expect(cancellation).resolves.toBeUndefined();
